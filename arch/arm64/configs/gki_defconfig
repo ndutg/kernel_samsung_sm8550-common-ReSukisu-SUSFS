@@ -6865,4 +6865,12 @@ CONFIG_CC_HAS_SANCOV_TRACE_PC=y
 CONFIG_ARCH_USE_MEMTEST=y
 # CONFIG_MEMTEST is not set
 # end of Kernel Testing and Coverage
+
+#
+# KernelSU
+#
+CONFIG_KSU=y
+CONFIG_KSU_WITH_KPROBES=n
+# end of KernelSU
+
 # end of Kernel hacking
