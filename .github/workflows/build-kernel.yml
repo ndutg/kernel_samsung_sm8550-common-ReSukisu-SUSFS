@@ -1,0 +1,75 @@
+name: Build kernel (KSU Next, scope-minimized manual hooks)
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+
+      - name: Set up the toolchain
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc bison build-essential curl flex \
+            g++-multilib gcc-multilib git gnupg \
+            lib32readline-dev lib32z1-dev \
+            libelf-dev liblz4-tool libssl-dev \
+            lzop zlib1g-dev pahole dwarves cpio zip \
+            python3 python-is-python3 tar perl lz4 jq
+
+      - name: Clone source
+        run: |
+          git clone --depth=1 -b android13-5.15 https://github.com/reddxae/kernel_samsung_sm8550-common-ksu.git
+
+          # Clone only necessary version of the AOSP Clang from the crDroid mirror (critically saves time and space!)
+          git clone --depth=1 https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r522817.git
+
+      - name: Apply the KernelSU Next and manual hooks patch
+        run: |
+          cd kernel_samsung_sm8550-common-ksu
+
+          # Determine the tag of the latest release of KernelSU Next
+          echo "KSUNEXT_VERSION=$(curl -s "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" | jq -r '.[0].name')" >> $GITHUB_ENV
+
+          # Integrate the latest release of KernelSU Next into the source
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+
+          # Integrate scope-minimized manual KernelSU hooks via a patch
+          cp .github/goodies/scope_min_manual_hooks_v1.4.patch .
+          patch -p1 --fuzz=3 < scope_min_manual_hooks_v1.4.patch
+
+      - name: Set up swap space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 16
+
+      - name: Build the kernel
+        run: |
+          # Add AOSP Clang to local PATH
+          export PATH="$(pwd)/android_prebuilts_clang_host_linux-x86_clang-r522817/bin:$PATH"
+
+          cd kernel_samsung_sm8550-common-ksu
+
+          # Determine the current kernel version
+          echo "KERNEL_VERSION=$(make kernelversion | awk '/^[0-9]/ {print $1}')" >> $GITHUB_ENV
+
+          # Generate configuration
+          make -j$(nproc --all) O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 gki_defconfig || exit 1
+
+          # Run build
+          make -j$(nproc --all) O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 || exit 1
+
+      - name: Package image with AnyKernel3
+        run: |
+          cp kernel_samsung_sm8550-common-ksu/.github/goodies/AnyKernel3.zip .
+          unzip AnyKernel3.zip -d AnyKernel3/
+          cp kernel_samsung_sm8550-common-ksu/out/arch/arm64/boot/Image.gz AnyKernel3/
+
+      - name: Upload the flashable kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: common-${{ env.KERNEL_VERSION }}_ksunext-${{ env.KSUNEXT_VERSION }}-manual
+          path: AnyKernel3/
