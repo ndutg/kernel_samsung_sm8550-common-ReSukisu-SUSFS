@@ -1,3 +1,21 @@
+# Custom Common Kernel
+
+### Changes:
+* KernelSU Next shipped with manual hooks (scope-minimized).
+
+Builds are done by [a workflow](.github/workflows/build-kernel.yml). I've also reuploaded some useful stuff to a local repo for convenience and to avoid unwanted issues caused by unproven changes on remote. You can find those files [here](.github/goodies).
+
+### Credits:  
+* [@edgars-cirulis](https://github.com/edgars-cirulis) for the kernel source.
+* [@rifsxd](https://github.com/rifsxd) for [KernelSU Next](https://github.com/KernelSU-Next/KernelSU-Next).
+* [@backslashxx](https://github.com/backslashxx) for [scope-minimized manual KernelSU hooks](https://github.com/backslashxx/KernelSU/issues/5) and [@fatalcoder524](https://github.com/fatalcoder524) for [ready-made hooks patch](https://github.com/WildKernels/kernel_patches/blob/main/next/scope_min_manual_hooks_v1.4.patch).
+* [@osm0sis](https://github.com/osm0sis/AnyKernel3) for [AnyKernel3](https://github.com/osm0sis/AnyKernel3) and [@edgars-cirulis](https://github.com/edgars-cirulis) for its configuration.
+
+___
+<details>
+
+<summary>Original README</summary>
+
 # How do I submit patches to Android Common Kernels
 
 1. BEST: Make all of your changes to upstream Linux. If appropriate, backport to the stable releases.
@@ -148,3 +166,4 @@ a maintainer tree)
     - tag the patch subject with `ANDROID:`
     - add a `Bug:` tag with the Android bug (required for android-specific features)
 
+</details>
