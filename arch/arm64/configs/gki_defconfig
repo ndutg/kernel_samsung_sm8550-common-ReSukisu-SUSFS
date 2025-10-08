@@ -6870,7 +6870,7 @@ CONFIG_ARCH_USE_MEMTEST=y
 # KernelSU
 #
 CONFIG_KSU=y
-CONFIG_KSU_WITH_KPROBES=n
+CONFIG_KSU_KPROBES_HOOK=n
 # end of KernelSU
 
 # end of Kernel hacking
