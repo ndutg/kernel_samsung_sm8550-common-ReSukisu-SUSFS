@@ -56,6 +56,9 @@ jobs:
           # Determine the current kernel version
           echo "KERNEL_VERSION=$(make kernelversion | awk '/^[0-9]/ {print $1}')" >> $GITHUB_ENV
 
+          # Get the current date
+          echo "DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+
           # Generate configuration
           make -j$(nproc --all) O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 gki_defconfig || exit 1
 
@@ -71,5 +74,5 @@ jobs:
       - name: Upload the flashable kernel
         uses: actions/upload-artifact@v4
         with:
-          name: common-${{ env.KERNEL_VERSION }}_ksunext-${{ env.KSUNEXT_VERSION }}-manual
+          name: common-${{ env.KERNEL_VERSION }}_ksunext-${{ env.KSUNEXT_VERSION }}-manual_${{ env.DATE }}
           path: AnyKernel3/
