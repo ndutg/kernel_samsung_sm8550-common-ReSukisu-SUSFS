@@ -24,8 +24,11 @@ jobs:
         run: |
           git clone --depth=1 -b android13-5.15 https://github.com/reddxae/kernel_samsung_sm8550-common-ksu.git
 
-          # Clone only necessary version of the AOSP Clang from the crDroid mirror (critically saves time and space!)
-          git clone --depth=1 https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r522817.git
+          # Clone only necessary version of the AOSP Clang (critically saves time and space!)
+          curl -L -o clang.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/ebcc6c3bef363bc539ea39f45b6abae1dce6ff1a/clang-r574158.tar.gz
+          mkdir clang
+          tar -xf clang.tar.gz -C clang
+          rm clang.tar.gz
 
       - name: Apply the KernelSU Next and manual hooks patch
         run: |
@@ -49,7 +52,7 @@ jobs:
       - name: Build the kernel
         run: |
           # Add AOSP Clang to local PATH
-          export PATH="$(pwd)/android_prebuilts_clang_host_linux-x86_clang-r522817/bin:$PATH"
+          export PATH="$(pwd)/clang/bin:$PATH"
 
           cd kernel_samsung_sm8550-common-ksu
 
