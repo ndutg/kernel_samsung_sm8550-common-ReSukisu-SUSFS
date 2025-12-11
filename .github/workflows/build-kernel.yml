@@ -43,8 +43,8 @@ jobs:
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
 
           # Integrate scope-minimized manual KernelSU hooks via a patch
-          cp .github/goodies/scope_min_manual_hooks_v1.6.patch .
-          patch -p1 --fuzz=3 < scope_min_manual_hooks_v1.6.patch
+          cp .github/goodies/scope_min_manual_hooks_v1.5.patch .
+          patch -p1 --fuzz=3 < scope_min_manual_hooks_v1.5.patch
 
       - name: Set up swap space
         uses: pierotofy/set-swap-space@master
