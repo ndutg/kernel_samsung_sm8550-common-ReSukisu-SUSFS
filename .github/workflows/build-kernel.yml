@@ -38,7 +38,9 @@ jobs:
           echo "KSU_VERSION=$(curl -s "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" | jq -r '.[0].name')" >> $GITHUB_ENV
 
           # Integrate the latest release of KernelSU Next into the source
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+          #curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+          # Temporarily use next branch directly
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
 
           # Integrate scope-minimized manual KernelSU hooks via a patch
           cp .github/goodies/scope_min_manual_hooks_v1.6.patch .
