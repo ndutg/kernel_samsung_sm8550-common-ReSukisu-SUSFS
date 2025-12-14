@@ -34,23 +34,15 @@ jobs:
         run: |
           cd kernel_samsung_sm8550-common-ksu
 
-          # Determine the current version of KernelSU Next via the commit count
-          echo "KSU_COMMIT=$( \
-          curl -sI "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/commits?sha=dev&per_page=1" \
-          | grep -i "link:" \
-          | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p' \
-          || true \
-          )" >> $GITHUB_ENV
+          # Determine the tag of the latest release of KernelSU Next
+          echo "KSU_VERSION=$(curl -s "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" | jq -r '.[0].name')" >> $GITHUB_ENV
 
-          # Match Makefile logic
-          echo "KSU_VERSION=$(expr 10000 + $KSU_COMMIT + 200)" >> $GITHUB_ENV
-
-          # Integrate the latest KernelSU Next development branch into the source
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s dev
+          # Integrate the latest release of KernelSU Next into the source
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
           # Integrate scope-minimized manual KernelSU hooks via a patch (temporarily skipped)
-          #cp .github/goodies/scope_min_manual_hooks_v1.6.patch .
-          #patch -p1 --fuzz=3 < scope_min_manual_hooks_v1.6.patch
+          # cp .github/goodies/scope_min_manual_hooks_v1.6.patch .
+          # patch -p1 --fuzz=3 < scope_min_manual_hooks_v1.6.patch
 
       - name: Set up swap space
         uses: pierotofy/set-swap-space@master
@@ -85,5 +77,5 @@ jobs:
       - name: Upload the flashable kernel
         uses: actions/upload-artifact@v4
         with:
-          name: common-${{ env.KERNEL_VERSION }}_ksunext-dev-${{ env.KSU_VERSION }}-manual_${{ env.DATE }}
+          name: common-${{ env.KERNEL_VERSION }}_ksunext-${{ env.KSU_VERSION }}_${{ env.DATE }}
           path: AnyKernel3/
