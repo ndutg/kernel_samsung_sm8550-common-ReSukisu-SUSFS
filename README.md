@@ -1,14 +1,15 @@
 # Custom Common Kernel
 
 ### Changes:
-* KernelSU Next shipped with manual hooks (scope-minimized).
+* Shipped with KernelSU Next integrated via Kprobes.
 
-Builds are done by [a workflow](.github/workflows/build-kernel.yml). I've also reuploaded some useful stuff to a local repo for convenience and to avoid unwanted issues caused by unproven changes on remote. You can find those files [here](.github/goodies).
+If you're looking for the one with manual hooks, [go here](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/tree/manual).
 
-### Credits:  
+Builds are done by [a workflow](.github/workflows/build-kernel.yml).
+
+### Credits:
 * [@edgars-cirulis](https://github.com/edgars-cirulis) for the kernel source.
 * [@rifsxd](https://github.com/rifsxd) for [KernelSU Next](https://github.com/KernelSU-Next/KernelSU-Next).
-* [@backslashxx](https://github.com/backslashxx) for [scope-minimized manual KernelSU hooks](https://github.com/backslashxx/KernelSU/issues/5) and [@fatalcoder524](https://github.com/fatalcoder524) for [ready-made hooks patch](https://github.com/WildKernels/kernel_patches/blob/main/next/scope_min_manual_hooks_v1.4.patch).
 * [@osm0sis](https://github.com/osm0sis/AnyKernel3) for [AnyKernel3](https://github.com/osm0sis/AnyKernel3) and [@edgars-cirulis](https://github.com/edgars-cirulis) for its configuration.
 
 ___
