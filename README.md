@@ -1,21 +1,21 @@
 # Custom Common Kernel
 
+> [!NOTE]
+> This kernel is meant to run only on One UI (any version) or GSI with stock firmware.
+
 ### Changes:
-* Shipped with KernelSU Next integrated via Kprobes.
+* Shipped with stable KernelSU Next integrated via Kprobes.
 
-If you're looking for the one with manual hooks, [go here](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/tree/manual).
+Builds are done by [a workflow](.github/workflows/build-kernel.yml), so you can [download flashable ZIP from Actions](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/actions?query=branch%3Aksun-stable-kprobes).
 
-Builds are done by [a workflow](.github/workflows/build-kernel.yml).
+There are also builds available with the [KernelSU Next development branch](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/actions?query=branch%3Aksun-dev-kprobes). If you're looking for the one with manual hooks, [check this out](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/actions?query=branch%3Aksun-legacy-manual).
 
 ### Credits:
-* [@edgars-cirulis](https://github.com/edgars-cirulis) for the kernel source.
-* [@rifsxd](https://github.com/rifsxd) for [KernelSU Next](https://github.com/KernelSU-Next/KernelSU-Next).
+* AOSP and [@edgars-cirulis](https://github.com/edgars-cirulis) for the kernel source.
+* [@rifsxd](https://github.com/rifsxd) and community contributors for [KernelSU Next](https://github.com/KernelSU-Next/KernelSU-Next).
 * [@osm0sis](https://github.com/osm0sis/AnyKernel3) for [AnyKernel3](https://github.com/osm0sis/AnyKernel3) and [@edgars-cirulis](https://github.com/edgars-cirulis) for its configuration.
 
 ___
-<details>
-
-<summary>Original README</summary>
 
 # How do I submit patches to Android Common Kernels
 
@@ -166,5 +166,3 @@ a maintainer tree)
 - If the patch is a new feature
     - tag the patch subject with `ANDROID:`
     - add a `Bug:` tag with the Android bug (required for android-specific features)
-
-</details>
