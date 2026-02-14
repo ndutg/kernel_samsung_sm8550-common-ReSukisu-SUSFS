@@ -1,16 +1,16 @@
 # Custom Common Kernel
 
 > [!NOTE]
-> This kernel is meant to run only on One UI (any version) or GSI with stock firmware.
+> This kernel is meant to run only on One UI or GSI with stock firmware.
 
-### Changes:
-* Shipped with stable KernelSU Next integrated via Kprobes.
+### Changes in this fork
+* Shipped with `stable` KernelSU Next integrated via Kprobes.
 
 Builds are done by [a workflow](.github/workflows/build-kernel.yml), so you can [download flashable ZIP from Actions](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/actions?query=branch%3Aksun-stable-kprobes).
 
 There are also builds available with the [KernelSU Next development branch](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/actions?query=branch%3Aksun-dev-kprobes). If you're looking for the one with manual hooks, [check this out](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/actions?query=branch%3Aksun-legacy-manual).
 
-### Credits:
+### Credits
 * AOSP and [@edgars-cirulis](https://github.com/edgars-cirulis) for the kernel source.
 * [@rifsxd](https://github.com/rifsxd) and community contributors for [KernelSU Next](https://github.com/KernelSU-Next/KernelSU-Next).
 * [@osm0sis](https://github.com/osm0sis/AnyKernel3) for [AnyKernel3](https://github.com/osm0sis/AnyKernel3) and [@edgars-cirulis](https://github.com/edgars-cirulis) for its configuration.
