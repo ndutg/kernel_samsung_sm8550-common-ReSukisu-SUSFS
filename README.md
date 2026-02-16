@@ -5,6 +5,7 @@
 
 ### Changes in this fork
 * Shipped with `stable` KernelSU Next integrated via Kprobes.
+* Enable BTRFS support for mounting external storage.
 
 Builds are done by [a workflow](.github/workflows/build-kernel.yml), so you can [download flashable ZIP from Actions](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/actions?query=branch%3Aksun-stable-kprobes).
 
