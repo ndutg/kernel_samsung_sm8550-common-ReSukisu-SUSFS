@@ -9,7 +9,7 @@
 
 Builds are done by [a workflow](.github/workflows/build-kernel.yml), so you can [download flashable ZIP from Actions](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/actions?query=branch%3Aksun-stable-kprobes).
 
-There are also builds available with the [KernelSU Next development branch](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/actions?query=branch%3Aksun-dev-kprobes). If you're looking for the one with manual hooks, [check this out](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/actions?query=branch%3Aksun-legacy-manual).
+There are also builds available with the [KernelSU Next development branch](https://github.com/reddxae/kernel_samsung_sm8550-common-ksu/actions?query=branch%3Aksun-dev-kprobes).
 
 ### Credits
 * AOSP and [@edgars-cirulis](https://github.com/edgars-cirulis) for the kernel source.
