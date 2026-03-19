@@ -35,7 +35,7 @@ jobs:
 
       - name: Integrate KernelSU Next
         run: |
-          # Integrate the KernelSU Next stable branch into the source
+          # Integrate stable KernelSU Next
           (curl -sSfL --retry 3 --connect-timeout 5 \
             "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh" || \
             { echo "ERROR: Failed to retrieve the KernelSU Next setup script! Aborting." >&2; exit 1; }) | \
@@ -43,8 +43,8 @@ jobs:
 
           # Filename will include the release tag, since the stable branch normally updates prior to a new release
 
-          # Determine the tag of the latest release of KernelSU Next
-          echo "KSU_TAG=$(awk -F/ '/tags/ {print $NF}' KernelSU-Next/.git/packed-refs | tail -1)" >> $GITHUB_ENV
+          # Determine latest tag for stable releases
+          echo "KSU_TAG=$(git -C KernelSU-Next tag --list "v*.[0-9]" --sort=-v:refname | head -1)" >> $GITHUB_ENV
 
       - name: Set up swap space
         uses: pierotofy/set-swap-space@master
