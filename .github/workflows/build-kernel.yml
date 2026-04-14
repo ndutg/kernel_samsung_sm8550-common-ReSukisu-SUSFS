@@ -1,42 +1,90 @@
-name: Build
+# ============================================================================
+# SM8550 Kernel Build — Samsung Galaxy S23 Series
+# Base:   reddxae/kernel_samsung_sm8550-common-ksu (android13-5.15)
+# SUSFS:  gitlab.com/simonpunk/susfs4ksu — gki-android13-5.15
+#         (SM8550 kernel source ancestry is android13-5.15 even on OneUI 7)
+#         Last verified: 2026-04-12
+# Clang:  AOSP r584948 (mirror-goog, verified working for this kernel)
+# AK3:    Bundled at .github/goodies/AnyKernel3.zip (pre-configured for SM8550)
+#
+# HOW TO USE:
+#   1. Fork reddxae/kernel_samsung_sm8550-common-ksu
+#   2. Replace .github/workflows/build-kernel.yml with this file
+#   3. Go to Actions → "Build — SM8550 Kernel" → Run workflow
+#   4. Select your root solution and whether to enable SUSFS
+#
+# ROOT SOLUTION NOTES:
+#   ksu-next-stable  → KernelSU-Next stable branch (Kprobes)
+#   ksu-next-dev     → KernelSU-Next dev branch (Kprobes, bleeding edge)
+#   sukisu-ultra     → SukiSU-Ultra (KSU fork; SUSFS hooks built into driver)
+#   kernelsu-tiann   → Original KernelSU by tiann (Kprobes)
+#   apatch           → No KSU driver; flash output then patch boot.img via APatch app
+#   none             → Plain kernel, no root integration
+#
+# SUSFS NOTES:
+#   - gki-android13-5.15 branch is used for all root solutions on this device
+#   - 10_enable_susfs_for_ksu.patch targets KSU-Next hook architecture ONLY
+#     → Applied for: ksu-next-stable, ksu-next-dev
+#     → Skipped for: sukisu-ultra (SUSFS built-in), kernelsu-tiann (incompatible
+#       hook architecture — would corrupt driver), apatch, none
+#   - Kernel-level patches (50_add_susfs + source files) apply to ALL solutions
+#     except 'none'
+# ============================================================================
+
+name: Build — SM8550 Kernel (S23 Series)
+
 run-name: >-
   ${{
-    (!inputs.build_ksun_stable && !inputs.build_ksun_dev) && 'Build plain kernel'
-    || (inputs.build_ksun_stable && !inputs.build_ksun_dev) && 'Build kernel & integrate `stable` KernelSU Next via Kprobes'
-    || (!inputs.build_ksun_stable && inputs.build_ksun_dev) && 'Build kernel & integrate `dev` KernelSU Next via Kprobes'
-    || 'Build kernel & integrate KernelSU Next via Kprobes'
-  }}
+    inputs.root_solution == 'ksu-next-stable' && 'KSU-Next (stable)'  ||
+    inputs.root_solution == 'ksu-next-dev'    && 'KSU-Next (dev)'     ||
+    inputs.root_solution == 'sukisu-ultra'    && 'SukiSU-Ultra'       ||
+    inputs.root_solution == 'kernelsu-tiann'  && 'KernelSU (tiann)'   ||
+    inputs.root_solution == 'apatch'          && 'APatch-ready'        ||
+    'Plain kernel'
+  }} | SUSFS=${{ inputs.enable_susfs }}
 
 on:
   workflow_dispatch:
     inputs:
-      build_ksun_stable:
-        description: "Integrate KernelSU Next: stable"
+      root_solution:
+        description: 'Root solution to integrate'
+        required: true
+        type: choice
+        default: 'ksu-next-stable'
+        options:
+          - ksu-next-stable
+          - ksu-next-dev
+          - sukisu-ultra
+          - kernelsu-tiann
+          - apatch
+          - none
+      enable_susfs:
+        description: 'Apply SUSFS patches (gki-android13-5.15, verified 2026-04-12)'
         required: true
         type: boolean
         default: true
-      build_ksun_dev:
-        description: "Integrate KernelSU Next: dev"
-        required: true
-        type: boolean
-        default: false
+
+env:
+  SUSFS_REPO:   https://gitlab.com/simonpunk/susfs4ksu.git
+  SUSFS_BRANCH: gki-android13-5.15
 
 jobs:
-  build-ksun-stable:
-    if: inputs.build_ksun_stable
-
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Clone source
+      # ── Checkout ──────────────────────────────────────────────────────────────
+      - name: Clone kernel source
         uses: actions/checkout@v4
         with:
           ref: android13-5.15
           fetch-depth: '1'
 
-      - name: Set up the toolchain
+      # ── Toolchain ─────────────────────────────────────────────────────────────
+      - name: Set up build environment
         run: |
-          sudo apt update
-          sudo apt install -y --no-install-recommends \
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
             bc bison build-essential curl flex \
             g++-multilib gcc-multilib git gnupg \
             lib32readline-dev lib32z1-dev \
@@ -44,215 +92,183 @@ jobs:
             lzop zlib1g-dev pahole dwarves cpio zip \
             python3 python-is-python3 tar perl lz4 jq
 
-          # The AOSP Clang version currently in use is r584948
-          curl -sSfL --retry 3 --connect-timeout 10 \
+          # AOSP Clang r584948 — mirror-goog URL, verified for android13-5.15
+          echo "[*] Downloading AOSP Clang r584948..."
+          curl -sSfL --retry 3 --connect-timeout 20 \
             -o clang.tar.gz \
             "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r584948.tar.gz" || \
-            { echo "ERROR: Failed to download AOSP Clang! Aborting."; exit 1; }
-          mkdir clang-toolchain
-          tar -xf clang.tar.gz -C clang-toolchain
-          rm clang.tar.gz
+            { echo "ERROR: Failed to download AOSP Clang r584948. Aborting."; exit 1; }
 
-      - name: Integrate KernelSU Next
-        id: ksun
-        shell: bash
+          mkdir -p clang-toolchain
+          tar -xf clang.tar.gz -C clang-toolchain
+          rm -f clang.tar.gz
+
+      # ── Root solution integration ─────────────────────────────────────────────
+      # Each block sets $KSU_DIR (the cloned repo dir name on disk),
+      # $BUILD_SUFFIX (used in artifact name), and optionally
+      # $SUSFS_SKIP_KSU_DRIVER_PATCH=true when the driver patch must not be applied.
+
+      - name: Integrate KernelSU-Next — stable
+        if: inputs.root_solution == 'ksu-next-stable'
         run: |
-          (curl -sSfL --retry 3 --connect-timeout 5 \
+          echo "[*] KernelSU-Next stable..."
+          (curl -sSfL --retry 3 --connect-timeout 10 \
             "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh" || \
-            { echo "ERROR: Failed to retrieve the KernelSU Next setup script! Aborting." >&2; exit 1; }) | \
-            bash -s stable
+            { echo "ERROR: Failed to fetch KernelSU-Next stable setup.sh."; exit 1; }) | bash -s stable
 
-          # Filename will include the release tag, since the stable branch normally updates prior to a new release
+          KSU_TAG="$(git -C KernelSU-Next tag --list 'v*.[0-9]' --sort=-v:refname | head -1)"
+          echo "KSU_DIR=KernelSU-Next"                         >> $GITHUB_ENV
+          echo "BUILD_SUFFIX=ksun-stable-${KSU_TAG}-kprobes"   >> $GITHUB_ENV
 
-          # Determine latest tag for stable releases
-          KSU_ID="$(git -C KernelSU-Next tag --list 'v*.[0-9]' --sort=-v:refname | head -1)"
-
-          echo "ksun_id=$KSU_ID" >> "$GITHUB_OUTPUT"
-
-      - name: Set up swap space
-        uses: pierotofy/set-swap-space@master
-        with:
-          swap-size-gb: 24
-
-      - name: Compute build metadata
-        id: meta
-        shell: bash
+      - name: Integrate KernelSU-Next — dev
+        if: inputs.root_solution == 'ksu-next-dev'
         run: |
-          echo "kernel_version=$(make kernelversion | awk '/^[0-9]/ {print $1}')" >> "$GITHUB_OUTPUT"
-          echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
-
-      - name: Compile the kernel
-        run: |
-          # Add AOSP Clang to local PATH
-          export PATH="$GITHUB_WORKSPACE/clang-toolchain/bin:$PATH"
-
-          # Generate configuration
-          make -j"$(nproc --all)" O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 gki_defconfig
-
-          # Run make
-          make -j"$(nproc --all)" O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1
-
-      - name: Package image with AnyKernel3  # Avoid zipping, as `upload-artifact` handles compression automatically
-        run: |
-          cp .github/goodies/AnyKernel3.zip .
-          unzip AnyKernel3.zip -d AnyKernel3/
-          cp out/arch/arm64/boot/Image.gz AnyKernel3/
-
-      - name: Upload the flashable kernel
-        uses: actions/upload-artifact@v4
-        with:
-          name: >-
-            common-${{ steps.meta.outputs.kernel_version }}_ksun-stable-${{ steps.ksun.outputs.ksun_id }}-kprobes_${{ steps.meta.outputs.date }}
-          path: AnyKernel3/
-
-  build-ksun-dev:
-    if: inputs.build_ksun_dev
-
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone source
-        uses: actions/checkout@v4
-        with:
-          ref: android13-5.15
-          fetch-depth: '1'
-
-      - name: Set up the toolchain
-        run: |
-          sudo apt update
-          sudo apt install -y --no-install-recommends \
-            bc bison build-essential curl flex \
-            g++-multilib gcc-multilib git gnupg \
-            lib32readline-dev lib32z1-dev \
-            libelf-dev liblz4-tool libssl-dev \
-            lzop zlib1g-dev pahole dwarves cpio zip \
-            python3 python-is-python3 tar perl lz4 jq
-
-          # The AOSP Clang version currently in use is r584948
-          curl -sSfL --retry 3 --connect-timeout 10 \
-            -o clang.tar.gz \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r584948.tar.gz" || \
-            { echo "ERROR: Failed to download AOSP Clang! Aborting."; exit 1; }
-          mkdir clang-toolchain
-          tar -xf clang.tar.gz -C clang-toolchain
-          rm clang.tar.gz
-
-      - name: Integrate KernelSU Next
-        id: ksun
-        shell: bash
-        run: |
-          (curl -sSfL --retry 3 --connect-timeout 5 \
+          echo "[*] KernelSU-Next dev..."
+          (curl -sSfL --retry 3 --connect-timeout 10 \
             "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/dev/kernel/setup.sh" || \
-            { echo "ERROR: Failed to retrieve the KernelSU Next setup script! Aborting." >&2; exit 1; }) | \
-            bash -s dev
+            { echo "ERROR: Failed to fetch KernelSU-Next dev setup.sh."; exit 1; }) | bash -s dev
 
-          # Filename will include the current version number instead of the tag
-          # This simplifies tracking for the dev branch builds, as tags only update on new releases
+          COMMIT_COUNT="$(git -C KernelSU-Next rev-list --count HEAD)"
+          KSU_VERSION="$((30000 + ${COMMIT_COUNT:-0}))"
+          echo "KSU_DIR=KernelSU-Next"                         >> $GITHUB_ENV
+          echo "BUILD_SUFFIX=ksun-dev-${KSU_VERSION}-kprobes"  >> $GITHUB_ENV
 
-          # Calculate the version of KernelSU Next by counting the commits
-          COMMIT_VALUE="$(git -C KernelSU-Next rev-list --count HEAD)"
-          KSU_ID="$((30000 + ${COMMIT_VALUE:-0}))"
+      - name: Integrate SukiSU-Ultra
+        if: inputs.root_solution == 'sukisu-ultra'
+        run: |
+          echo "[*] SukiSU-Ultra..."
+          (curl -sSfL --retry 3 --connect-timeout 10 \
+            "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" || \
+            { echo "ERROR: Failed to fetch SukiSU-Ultra setup.sh."; exit 1; }) | bash -s main
 
-          echo "ksun_id=$KSU_ID" >> "$GITHUB_OUTPUT"
+          SUKI_TAG="$(git -C KernelSU tag --list 'v*' --sort=-v:refname | head -1)"
+          echo "KSU_DIR=KernelSU"                              >> $GITHUB_ENV
+          echo "BUILD_SUFFIX=sukisu-${SUKI_TAG}"               >> $GITHUB_ENV
+          # SukiSU-Ultra has SUSFS hooks built into its driver already.
+          # 10_enable_susfs_for_ksu.patch is KSU-Next-specific — applying it here
+          # would corrupt the SukiSU driver. Kernel-level patches still apply.
+          echo "SUSFS_SKIP_KSU_DRIVER_PATCH=true"              >> $GITHUB_ENV
 
+      - name: Integrate KernelSU — tiann/original
+        if: inputs.root_solution == 'kernelsu-tiann'
+        run: |
+          echo "[*] KernelSU (tiann/original)..."
+          (curl -sSfL --retry 3 --connect-timeout 10 \
+            "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" || \
+            { echo "ERROR: Failed to fetch tiann/KernelSU setup.sh."; exit 1; }) | bash -s main
+
+          KSU_TAG="$(git -C KernelSU tag --list 'v*' --sort=-v:refname | head -1)"
+          echo "KSU_DIR=KernelSU"                              >> $GITHUB_ENV
+          echo "BUILD_SUFFIX=kernelsu-tiann-${KSU_TAG}"        >> $GITHUB_ENV
+          # 10_enable_susfs_for_ksu.patch targets KSU-Next's hook architecture
+          # (removes lsm_hook.o, syscall_hook_manager.o etc. that don't exist in
+          # tiann/KernelSU). Applying it would fail or corrupt this driver.
+          # Kernel-level SUSFS patches still apply.
+          echo "SUSFS_SKIP_KSU_DRIVER_PATCH=true"              >> $GITHUB_ENV
+
+      - name: Set APatch build suffix
+        if: inputs.root_solution == 'apatch'
+        run: |
+          # APatch patches the kernel binary post-build via the APatch app
+          # (bmax121/APatch, latest: v11142). No driver is integrated at build time.
+          # Workflow: flash this AnyKernel3 zip, then run APatch app to patch boot.img.
+          # If SUSFS is enabled, the kernel has full SUSFS support compiled in —
+          # APatch will detect and use it.
+          echo "BUILD_SUFFIX=apatch-ready"                     >> $GITHUB_ENV
+
+      - name: Set plain kernel build suffix
+        if: inputs.root_solution == 'none'
+        run: |
+          echo "BUILD_SUFFIX=plain"                            >> $GITHUB_ENV
+
+      # ── SUSFS kernel patching ─────────────────────────────────────────────────
+      # MUST run AFTER root solution steps so that $KSU_DIR is populated.
+      # Skipped entirely when root_solution == 'none' OR enable_susfs is false.
+
+      - name: Apply SUSFS patches
+        if: inputs.enable_susfs && inputs.root_solution != 'none'
+        run: |
+          echo "[*] Cloning SUSFS repo (branch: ${SUSFS_BRANCH})..."
+          git clone --depth=1 \
+            "${SUSFS_REPO}" \
+            -b "${SUSFS_BRANCH}" \
+            susfs4ksu || \
+            { echo "ERROR: Failed to clone SUSFS from GitLab. Aborting."; exit 1; }
+
+          # ── Step 1: Copy SUSFS source files into kernel tree ──────────────────
+          echo "[*] Copying SUSFS source files..."
+          cp susfs4ksu/kernel_patches/fs/susfs.c                 fs/
+          cp susfs4ksu/kernel_patches/include/linux/susfs.h      include/linux/
+          cp susfs4ksu/kernel_patches/include/linux/susfs_def.h  include/linux/
+
+          # ── Step 2: Apply main kernel patch ──────────────────────────────────
+          # Patches fs/Makefile, fs/Kconfig, and kernel hooks to wire SUSFS in.
+          # If this fails, the Samsung kernel tree has a conflict with the patch.
+          echo "[*] Applying 50_add_susfs_in_${SUSFS_BRANCH}.patch..."
+          patch -p1 --forward \
+            < "susfs4ksu/kernel_patches/50_add_susfs_in_${SUSFS_BRANCH}.patch" || \
+            { echo "ERROR: Main SUSFS kernel patch failed — likely a conflict with the Samsung tree. Aborting."; exit 1; }
+
+          # ── Step 3: Apply KSU driver SUSFS enablement patch ──────────────────
+          # Only for KSU-Next variants. This patch modifies the KernelSU-Next
+          # driver (removes non-kprobes hook objects, adds SUSFS config entries).
+          # See comments in each root solution step above for why this is skipped
+          # for SukiSU-Ultra, tiann/KernelSU, APatch, and none.
+          if [ -n "${KSU_DIR:-}" ] && [ "${SUSFS_SKIP_KSU_DRIVER_PATCH:-false}" != "true" ]; then
+            echo "[*] Applying 10_enable_susfs_for_ksu.patch to ${KSU_DIR}..."
+            cd "${KSU_DIR}"
+            patch -p1 --forward \
+              < "${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || \
+              { echo "ERROR: KSU driver SUSFS patch failed. Aborting."; exit 1; }
+            cd "${GITHUB_WORKSPACE}"
+          else
+            echo "[*] Skipping KSU driver patch — not applicable for this root solution."
+          fi
+
+          rm -rf susfs4ksu
+          echo "[+] SUSFS patching complete."
+
+      # ── Build metadata ────────────────────────────────────────────────────────
+      - name: Compute build metadata
+        id: meta
+        run: |
+          echo "kernel_version=$(make kernelversion | awk '/^[0-9]/ {print $1}')" >> $GITHUB_OUTPUT
+          echo "date=$(date +%Y%m%d)"                                              >> $GITHUB_OUTPUT
+
+      # ── Swap ──────────────────────────────────────────────────────────────────
       - name: Set up swap space
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 24
 
-      - name: Compute build metadata
-        id: meta
-        shell: bash
+      # ── Compile ───────────────────────────────────────────────────────────────
+      - name: Compile kernel
         run: |
-          echo "kernel_version=$(make kernelversion | awk '/^[0-9]/ {print $1}')" >> "$GITHUB_OUTPUT"
-          echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:$PATH"
 
-      - name: Compile the kernel
+          echo "[*] Generating defconfig (gki_defconfig)..."
+          make -j"$(nproc --all)" O=out ARCH=arm64 \
+            CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
+            gki_defconfig
+
+          echo "[*] Building kernel..."
+          make -j"$(nproc --all)" O=out ARCH=arm64 \
+            CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1
+
+      # ── Package ───────────────────────────────────────────────────────────────
+      - name: Package with AnyKernel3
         run: |
-          # Add AOSP Clang to local PATH
-          export PATH="$GITHUB_WORKSPACE/clang-toolchain/bin:$PATH"
-
-          # Generate configuration
-          make -j"$(nproc --all)" O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 gki_defconfig
-
-          # Run make
-          make -j"$(nproc --all)" O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1
-
-      - name: Package image with AnyKernel3  # Avoid zipping, as `upload-artifact` handles compression automatically
-        run: |
+          # AnyKernel3.zip is bundled in the repo at .github/goodies/ and is
+          # pre-configured for SM8550 (device check disabled, slot=auto).
           cp .github/goodies/AnyKernel3.zip .
           unzip AnyKernel3.zip -d AnyKernel3/
           cp out/arch/arm64/boot/Image.gz AnyKernel3/
 
-      - name: Upload the flashable kernel
+      # ── Upload ────────────────────────────────────────────────────────────────
+      - name: Upload flashable zip
         uses: actions/upload-artifact@v4
         with:
           name: >-
-            common-${{ steps.meta.outputs.kernel_version }}_ksun-dev-${{ steps.ksun.outputs.ksun_id }}-kprobes_${{ steps.meta.outputs.date }}
+            sm8550_${{ steps.meta.outputs.kernel_version }}_${{ env.BUILD_SUFFIX }}_susfs-${{ inputs.enable_susfs }}_${{ steps.meta.outputs.date }}
           path: AnyKernel3/
-
-  # If nothing is checked, proceed to build the plain kernel
-  build-plain:
-    if: ${{ !inputs.build_ksun_stable && !inputs.build_ksun_dev }}
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Clone source
-        uses: actions/checkout@v4
-        with:
-          ref: android13-5.15
-          fetch-depth: '1'
-
-      - name: Set up the toolchain
-        run: |
-          sudo apt update
-          sudo apt install -y --no-install-recommends \
-            bc bison build-essential curl flex \
-            g++-multilib gcc-multilib git gnupg \
-            lib32readline-dev lib32z1-dev \
-            libelf-dev liblz4-tool libssl-dev \
-            lzop zlib1g-dev pahole dwarves cpio zip \
-            python3 python-is-python3 tar perl lz4 jq
-
-          # The AOSP Clang version currently in use is r584948
-          curl -sSfL --retry 3 --connect-timeout 10 \
-            -o clang.tar.gz \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r584948.tar.gz" || \
-            { echo "ERROR: Failed to download AOSP Clang! Aborting."; exit 1; }
-          mkdir clang-toolchain
-          tar -xf clang.tar.gz -C clang-toolchain
-          rm clang.tar.gz
-
-      - name: Set up swap space
-        uses: pierotofy/set-swap-space@master
-        with:
-          swap-size-gb: 24
-
-      - name: Compute build metadata
-        id: meta
-        shell: bash
-        run: |
-          echo "kernel_version=$(make kernelversion | awk '/^[0-9]/ {print $1}')" >> "$GITHUB_OUTPUT"
-          echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"  
-
-      - name: Compile the kernel
-        run: |
-          # Add AOSP Clang to local PATH
-          export PATH="$GITHUB_WORKSPACE/clang-toolchain/bin:$PATH"
-
-          # Generate configuration
-          make -j"$(nproc --all)" O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 gki_defconfig
-
-          # Run make
-          make -j"$(nproc --all)" O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1
-
-      - name: Package image with AnyKernel3  # Avoid zipping, as `upload-artifact` handles compression automatically
-        run: |
-          cp .github/goodies/AnyKernel3.zip .
-          unzip AnyKernel3.zip -d AnyKernel3/
-          cp out/arch/arm64/boot/Image.gz AnyKernel3/
-
-      - name: Upload the flashable kernel
-        uses: actions/upload-artifact@v4
-        with:
-          name: common-${{ steps.meta.outputs.kernel_version }}_${{ steps.meta.outputs.date }}
-          path: AnyKernel3/
+          compression-level: 9
