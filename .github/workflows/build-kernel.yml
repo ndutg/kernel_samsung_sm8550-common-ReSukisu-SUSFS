@@ -164,14 +164,14 @@ jobs:
 
           # 4a: Copy SUSFS source files into kernel tree
           echo "Copying SUSFS source files..."
-          cp susfs4ksu/kernel/patches/fs/susfs.c               fs/
-          cp susfs4ksu/kernel/patches/include/linux/susfs.h     include/linux/
-          cp susfs4ksu/kernel/patches/include/linux/susfs_def.h include/linux/
+          cp susfs4ksu/kernel_patches/fs/susfs.c               fs/
+          cp susfs4ksu/kernel_patches/include/linux/susfs.h     include/linux/
+          cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
 
           # 4b: Apply main SUSFS kernel patch (wires fs/ hooks)
           echo "Applying 50addsusfsin${{ env.SUSFS_BRANCH }}.patch..."
           patch -p1 --forward \
-            < "susfs4ksu/kernel/patches/50addsusfsin${{ env.SUSFS_BRANCH }}.patch" \
+            < "susfs4ksu/kernel_patches/50_add_susfs_in_${{ env.SUSFS_BRANCH }}.patch" \
           || { echo "ERROR: Main SUSFS kernel patch failed — possible conflict with Samsung tree."; exit 1; }
 
           # 4c: KSU driver patch — intentionally skipped for all three variants
@@ -180,7 +180,7 @@ jobs:
           else
             echo "Applying 10-enable_susfs_for_ksu.patch..."
             patch -p1 --forward \
-              < "susfs4ksu/kernel/patches/10-enable_susfs_for_ksu.patch" \
+              < "susfs4ksu/kernel_patches/10_enable_susfs_for_ksu.patch" \
             || { echo "ERROR: KSU driver patch failed."; exit 1; }
           fi
 
