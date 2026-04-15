@@ -1,26 +1,35 @@
 # ============================================================================
-#  SM8550 Kernel Matrix Build
-#  Builds three root variants in parallel — all with SUSFS
+#  SM8550 Kernel Matrix Build — Selectable Variants + Clang Cache
 #
-#  Variants:
-#    1. KernelSU-Next  (stable branch)     → ksun-stable-*
-#    2. SukiSU Ultra   (susfs-main branch) → sukisu-susfs-*
-#    3. ReSukiSU       (main branch)       → resukisu-*
+#  When you trigger this workflow you get three checkboxes:
+#    ☑ KernelSU-Next  (stable)
+#    ☑ SukiSU Ultra   (susfs-main)
+#    ☑ ReSukiSU       (main)
+#  Untick any you don't want — only ticked variants consume a runner.
 #
-#  All three variants ship SUSFS driver integration on their respective
-#  branches, so SUSFS_SKIP_KSU_DRIVER_PATCH=true for all.
-#  The kernel-side fs/ SUSFS patch (50addsusfsin*.patch) is always applied.
+#  Clang r584948 is cached after the first download.
+#  Subsequent runs restore it in ~30 s instead of re-downloading.
 #
-#  Artifact naming:
-#    sm8550-<kernelver>-<variant>-<ksu-tag>-kprobes-susfs-<date>
-#
-#  File location in your repo: .github/workflows/build-kernel-matrix.yml
+#  File location: .github/workflows/build-kernel-matrix.yml
 # ============================================================================
 
 name: Build SM8550 Kernel — KSU Matrix
 
 on:
   workflow_dispatch:
+    inputs:
+      build_ksun:
+        description: "Build KernelSU-Next (stable)"
+        type: boolean
+        default: true
+      build_sukisu:
+        description: "Build SukiSU Ultra (susfs-main)"
+        type: boolean
+        default: true
+      build_resukisu:
+        description: "Build ReSukiSU (main)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -28,60 +37,89 @@ permissions:
   packages: write
 
 env:
-  KERNEL_REPO:   https://github.com/ndutg/kernel_samsung_sm8550-common-ksususfs
   KERNEL_BRANCH: android13-5.15
   SUSFS_REPO:    https://gitlab.com/simonpunk/susfs4ksu.git
   SUSFS_BRANCH:  gki-android13-5.15
   CLANG_VERSION: r584948
 
+# ── Job 1: Build the matrix list from the user's checkbox choices ────────────
 jobs:
+  setup:
+    name: Resolve build matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      is_empty: ${{ steps.build-matrix.outputs.is_empty }}
+
+    steps:
+      - name: Build variant matrix from inputs
+        id: build-matrix
+        run: |
+          VARIANTS='[]'
+
+          # Append each selected variant as a JSON object
+          if [ "${{ inputs.build_ksun }}" = "true" ]; then
+            VARIANTS=$(echo "$VARIANTS" | jq '. += [{
+              "variant":         "ksun-stable",
+              "display_name":    "KernelSU-Next (stable)",
+              "setup_url":       "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh",
+              "setup_arg":       "stable",
+              "ksu_dir":         "KernelSU-Next",
+              "artifact_prefix": "ksun-stable",
+              "skip_drv_patch":  "true"
+            }]')
+          fi
+
+          if [ "${{ inputs.build_sukisu }}" = "true" ]; then
+            VARIANTS=$(echo "$VARIANTS" | jq '. += [{
+              "variant":         "sukisu-ultra",
+              "display_name":    "SukiSU Ultra (susfs-main)",
+              "setup_url":       "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh",
+              "setup_arg":       "susfs-main",
+              "ksu_dir":         "KernelSU",
+              "artifact_prefix": "sukisu-susfs",
+              "skip_drv_patch":  "true"
+            }]')
+          fi
+
+          if [ "${{ inputs.build_resukisu }}" = "true" ]; then
+            VARIANTS=$(echo "$VARIANTS" | jq '. += [{
+              "variant":         "resukisu",
+              "display_name":    "ReSukiSU (main)",
+              "setup_url":       "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh",
+              "setup_arg":       "main",
+              "ksu_dir":         "KernelSU",
+              "artifact_prefix": "resukisu",
+              "skip_drv_patch":  "true"
+            }]')
+          fi
+
+          COUNT=$(echo "$VARIANTS" | jq 'length')
+          echo "Selected $COUNT variant(s): $VARIANTS"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "is_empty=true"  >> $GITHUB_OUTPUT
+            echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+            echo "::warning::No variants selected — nothing to build. Tick at least one checkbox."
+          else
+            echo "is_empty=false" >> $GITHUB_OUTPUT
+            echo "matrix={\"include\":$VARIANTS}" >> $GITHUB_OUTPUT
+          fi
+
+# ── Job 2: Build — runs once per selected variant, in parallel ──────────────
   build:
     name: ${{ matrix.display_name }}
+    needs: setup
+    if: needs.setup.outputs.is_empty == 'false'
     runs-on: ubuntu-24.04
 
     strategy:
-      fail-fast: false          # don't cancel siblings if one variant fails
-      matrix:
-        include:
-
-          # ── 1. KernelSU-Next stable ─────────────────────────────────────
-          - variant:         ksun-stable
-            display_name:    "KernelSU-Next (stable)"
-            setup_url:       "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh"
-            setup_arg:       stable
-            ksu_dir:         KernelSU-Next
-            artifact_prefix: ksun-stable
-            skip_drv_patch:  "true"
-            # KSU-Next ships susfsd.rs daemon built-in on stable branch.
-            # sulog.o renamed to tinysulog.o — driver patch would conflict.
-
-          # ── 2. SukiSU Ultra (susfs-main) ────────────────────────────────
-          - variant:         sukisu-ultra
-            display_name:    "SukiSU Ultra (susfs-main)"
-            setup_url:       "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh"
-            setup_arg:       susfs-main
-            ksu_dir:         KernelSU
-            artifact_prefix: sukisu-susfs
-            skip_drv_patch:  "true"
-            # susfs-main branch has SUSFS driver integration built-in.
-            # Kernel-side fs/ patch (50addsusfsin*.patch) still applied below.
-
-          # ── 3. ReSukiSU (main) ──────────────────────────────────────────
-          - variant:         resukisu
-            display_name:    "ReSukiSU (main)"
-            setup_url:       "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh"
-            setup_arg:       main
-            ksu_dir:         KernelSU
-            artifact_prefix: resukisu
-            skip_drv_patch:  "true"
-            # ReSukiSU is derived from SukiSU Ultra — SUSFS driver built-in.
-            # NOTE: If this variant fails at setup, verify that ReSukiSU's
-            # main branch includes SUSFS. If not, change setup_arg to
-            # "susfs-main" (if that branch exists in their repo).
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
 
-      # ── Step 1: Checkout kernel source ──────────────────────────────────
+      # ── 1. Checkout kernel source ─────────────────────────────────────────
       - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
@@ -90,8 +128,9 @@ jobs:
           fetch-depth: 1
           token:       ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Step 2: Install build dependencies + AOSP Clang r584948 ─────────
-      - name: Install dependencies and Clang ${{ env.CLANG_VERSION }}
+      # ── 2. Install build dependencies ────────────────────────────────────
+      #    No python2 — not available on Ubuntu 24.04 and not needed.
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -102,19 +141,49 @@ jobs:
             lzop zlib1g-dev pahole dwarves cpio zip \
             python3 python-is-python3 tar perl lz4 jq
 
-          echo "Downloading AOSP Clang ${{ env.CLANG_VERSION }}..."
-          curl -sSfL --retry 3 --connect-timeout 20 \
+      # ── 3. Restore Clang from cache (or download on first run) ───────────
+      #
+      #    HOW THE CACHE WORKS:
+      #    ┌─ First run ──────────────────────────────────────────────────┐
+      #    │  cache-hit = false → download ~600 MB, extract, save to cache│
+      #    │  takes ~5-8 minutes                                          │
+      #    └──────────────────────────────────────────────────────────────┘
+      #    ┌─ All subsequent runs ────────────────────────────────────────┐
+      #    │  cache-hit = true  → restore from GitHub cache storage       │
+      #    │  takes ~20-40 seconds  (skips the download entirely)         │
+      #    └──────────────────────────────────────────────────────────────┘
+      #    Cache key includes the version string — if you change
+      #    CLANG_VERSION the cache auto-invalidates and re-downloads once.
+      #    GitHub retains the cache for 7 days after its last use.
+      #    Cache storage limit: 10 GB per repo (free tier).
+      #
+      - name: Restore Clang ${{ env.CLANG_VERSION }} from cache
+        id: cache-clang
+        uses: actions/cache@v4
+        with:
+          path: clang-toolchain
+          key:  clang-aosp-${{ env.CLANG_VERSION }}
+
+      - name: Download + extract Clang ${{ env.CLANG_VERSION }} (first run only)
+        if: steps.cache-clang.outputs.cache-hit != 'true'
+        run: |
+          echo "Cache miss — downloading AOSP Clang ${{ env.CLANG_VERSION }}..."
+          curl -sSfL --retry 3 --connect-timeout 30 \
             -o clang.tar.gz \
             "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-${{ env.CLANG_VERSION }}.tar.gz" \
-          || { echo "ERROR: Failed to download AOSP Clang ${{ env.CLANG_VERSION }}. Aborting."; exit 1; }
+          || { echo "ERROR: Clang download failed."; exit 1; }
 
           mkdir -p clang-toolchain
           tar -xf clang.tar.gz -C clang-toolchain
           rm -f clang.tar.gz
+          echo "Clang ready — will be cached after this run."
 
-      # ── Step 3: Setup KSU variant (matrix-driven) ────────────────────────
-      # Each setup.sh clones the respective KSU repo, symlinks the driver
-      # into the kernel tree, and modifies Makefile + Kconfig automatically.
+      - name: Verify Clang binary
+        run: |
+          export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
+          clang --version || { echo "ERROR: clang binary not found in toolchain."; exit 1; }
+
+      # ── 4. Setup selected KSU variant ────────────────────────────────────
       - name: Setup ${{ matrix.display_name }}
         id: ksu
         run: |
@@ -122,21 +191,20 @@ jobs:
           curl -sSfL --retry 3 --connect-timeout 20 \
             "${{ matrix.setup_url }}" \
             | bash -s "${{ matrix.setup_arg }}" \
-          || { echo "ERROR: Failed to fetch or run setup.sh for ${{ matrix.display_name }}."; exit 1; }
+          || { echo "ERROR: setup.sh failed for ${{ matrix.display_name }}."; exit 1; }
 
           KSU_DIR="${{ matrix.ksu_dir }}"
 
-          # Detect version tag from the cloned KSU directory
-          if [ -d "${KSU_DIR}" ]; then
-            KSU_TAG=$(git -C "${KSU_DIR}" tag --list 'v[0-9]*' \
-                          --sort=-v:refname 2>/dev/null | head -1 || true)
-            KSU_NUMERIC=$(grep -rh 'KSU_VERSION\b\|KERNELSU_VERSION\b' \
-                              "${KSU_DIR}/kernel/ksu.h" \
-                              "${KSU_DIR}/kernel/version.h" 2>/dev/null \
-                          | grep -oP '\b[0-9]{4,5}\b' | head -1 || true)
-          fi
-          [ -z "${KSU_TAG:-}" ]     && KSU_TAG="$(git -C "${KSU_DIR}" describe --tags --abbrev=0 2>/dev/null || echo main)"
-          [ -z "${KSU_NUMERIC:-}" ] && KSU_NUMERIC="$(git -C "${KSU_DIR}" rev-list --count HEAD 2>/dev/null || echo 0)"
+          KSU_TAG=$(git -C "${KSU_DIR}" describe --tags --abbrev=0 2>/dev/null \
+                    || git -C "${KSU_DIR}" tag --list 'v[0-9]*' --sort=-v:refname \
+                       2>/dev/null | head -1 \
+                    || echo "main")
+          KSU_NUMERIC=$(grep -rh 'KSU_VERSION\b\|KERNELSU_VERSION\b' \
+                            "${KSU_DIR}/kernel/ksu.h" \
+                            "${KSU_DIR}/kernel/version.h" 2>/dev/null \
+                        | grep -oP '\b[0-9]{4,5}\b' | head -1 \
+                        || git -C "${KSU_DIR}" rev-list --count HEAD 2>/dev/null \
+                        || echo "0")
 
           BUILD_SUFFIX="${{ matrix.artifact_prefix }}-${KSU_TAG}-kprobes"
 
@@ -148,11 +216,7 @@ jobs:
           echo "BUILDSUFFIX=${BUILD_SUFFIX}"                          >> $GITHUB_ENV
           echo "SUSFSSKIPKSUDRIVERPATCH=${{ matrix.skip_drv_patch }}" >> $GITHUB_ENV
 
-      # ── Step 4: Apply SUSFS kernel patches ───────────────────────────────
-      # Two patches live in the SUSFS repo:
-      #   50addsusfsin<branch>.patch — hooks into kernel fs/ code (ALWAYS applied)
-      #   10-enable_susfs_for_ksu.patch — hooks into KSU driver code
-      #                                   (SKIPPED for all: built-in on each branch)
+      # ── 5. Apply SUSFS patches ────────────────────────────────────────────
       - name: Apply SUSFS patches
         run: |
           echo "==> Cloning SUSFS (branch: ${{ env.SUSFS_BRANCH }})..."
@@ -160,35 +224,31 @@ jobs:
             "${{ env.SUSFS_REPO }}" \
             -b "${{ env.SUSFS_BRANCH }}" \
             susfs4ksu \
-          || { echo "ERROR: Failed to clone SUSFS from GitLab. Aborting."; exit 1; }
+          || { echo "ERROR: Failed to clone SUSFS."; exit 1; }
 
-          # 4a: Copy SUSFS source files into kernel tree
           echo "Copying SUSFS source files..."
           cp susfs4ksu/kernel_patches/fs/susfs.c               fs/
           cp susfs4ksu/kernel_patches/include/linux/susfs.h     include/linux/
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
 
-          # 4b: Apply main SUSFS kernel patch (wires fs/ hooks)
-          echo "Applying 50addsusfsin${{ env.SUSFS_BRANCH }}.patch..."
+          echo "Applying 50_add_susfs_in_${{ env.SUSFS_BRANCH }}.patch..."
           patch -p1 --forward \
             < "susfs4ksu/kernel_patches/50_add_susfs_in_${{ env.SUSFS_BRANCH }}.patch" \
-          || { echo "ERROR: Main SUSFS kernel patch failed — possible conflict with Samsung tree."; exit 1; }
+          || { echo "ERROR: Main SUSFS kernel patch failed."; exit 1; }
 
-          # 4c: KSU driver patch — intentionally skipped for all three variants
           if [ "${SUSFSSKIPKSUDRIVERPATCH}" = "true" ]; then
             echo "KSU driver patch skipped — ${{ matrix.display_name }} has SUSFS built-in."
           else
-            echo "Applying 10-enable_susfs_for_ksu.patch..."
             patch -p1 --forward \
               < "susfs4ksu/kernel_patches/10_enable_susfs_for_ksu.patch" \
             || { echo "ERROR: KSU driver patch failed."; exit 1; }
           fi
 
           rm -rf susfs4ksu
-          echo "==> SUSFS kernel patching complete."
+          echo "==> SUSFS patching complete."
 
-      # ── Step 5: Resolve kernel version + build date ──────────────────────
-      - name: Get kernel version and date
+      # ── 6. Kernel version + build date ───────────────────────────────────
+      - name: Resolve kernel version and date
         id: meta
         run: |
           KVER=$(make kernelversion 2>/dev/null | awk -F. '{print $1"."$2"."$3}')
@@ -196,39 +256,36 @@ jobs:
           echo "date=$(date +%Y%m%d)"  >> $GITHUB_OUTPUT
           echo "Kernel version: ${KVER}"
 
-      # ── Step 6: Expand swap to 24 GB ─────────────────────────────────────
+      # ── 7. Expand swap to 24 GB ───────────────────────────────────────────
       - name: Set up swap (24 GB)
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 24
 
-      # ── Step 7: Generate defconfig + compile kernel ───────────────────────
+      # ── 8. Compile kernel ─────────────────────────────────────────────────
       - name: Build kernel (${{ matrix.display_name }})
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
 
-          echo "==> Generating defconfig gki_defconfig..."
+          echo "==> Generating defconfig..."
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC=clang LD=ld.lld LLVM=1 LLVMIAS=1 \
             gki_defconfig
 
-          echo "==> Building kernel: ${{ matrix.display_name }} [${BUILDSUFFIX}]..."
+          echo "==> Compiling: ${{ matrix.display_name }} [${BUILDSUFFIX}]..."
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC=clang LD=ld.lld LLVM=1 LLVMIAS=1
 
           echo "==> Build complete."
 
-      # ── Step 8: Package with AnyKernel3 ──────────────────────────────────
-      # AnyKernel3.zip is pre-configured in .github/goodies:
-      #   device check disabled, slot=auto — works for all SM8550 variants.
+      # ── 9. Package with AnyKernel3 ───────────────────────────────────────
       - name: Package AnyKernel3 ZIP
         run: |
           cp .github/goodies/AnyKernel3.zip .
           unzip AnyKernel3.zip -d AnyKernel3
           cp out/arch/arm64/boot/Image.gz AnyKernel3/
 
-      # ── Step 9: Upload artifact ───────────────────────────────────────────
-      # Artifact name: sm8550-<kernelver>-<variant>-<ksu-tag>-kprobes-susfs-<date>
+      # ── 10. Upload artifact ───────────────────────────────────────────────
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
