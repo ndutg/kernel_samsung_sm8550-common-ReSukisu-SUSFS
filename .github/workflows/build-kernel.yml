@@ -2,15 +2,22 @@
 # SM8550 Kernel Matrix Build — Selectable Variants + Clang Cache + KPM
 #
 # Variants:
-#   1. KernelSU-Next (stable)        → no KPM (not supported upstream)
-#   2. SukiSU Ultra  (susfs-main)    → KPM enabled ✓
-#   3. ReSukiSU      (main)          → KPM enabled ✓
+#   1. KernelSU-Next (stable v3.2.0+) -> no KPM (not supported upstream)
+#   2. SukiSU Ultra  (main  v4.1.2+)  -> KPM enabled
+#   3. ReSukiSU      (main  v4.1.0+)  -> KPM enabled
 #
 # KPM requires: CONFIG_KPM=y + CONFIG_KALLSYMS=y + CONFIG_KALLSYMS_ALL=y
 # Applied via scripts/config after defconfig, then olddefconfig to resolve deps.
 #
 # Clang r584948 is cached — first run downloads once, all subsequent runs
 # restore in ~30 s.
+#
+# Last verified: April 2026
+#   KernelSU-Next : v3.2.0  (2026-04-14) — stable branch  (HTTP 200)
+#   SukiSU Ultra  : v4.1.2  (2026-03-09) — main branch    (HTTP 200)
+#   ReSukiSU      : v4.1.0  (latest tag) — main branch    (HTTP 200)
+#   SUSFS4KSU     : gki-android13-5.15   — gitlab.com/simonpunk/susfs4ksu
+#   AOSP Clang    : r584948 (confirmed working in CI)
 #
 # FIX 1 — Clang cache miss on parallel runs:
 #   A dedicated `prepare-clang` job runs BEFORE the matrix and saves the
@@ -34,6 +41,13 @@
 #   Ref: simonpunk/susfs4ksu docs: "Make sure to have CONFIG_KSU_SUSFS
 #   enabled before building — some features are disabled by default."
 #
+# FIX 5 — Node.js 24 compatibility (GitHub Actions cutover June 2, 2026):
+#   GitHub is forcing all Actions runners to Node.js 24 on June 2, 2026.
+#   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true' is set in the global env
+#   so we opt-in now — this eliminates the deprecation warning from the
+#   runner logs and ensures builds keep working past the cutover date.
+#   Ref: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners
+#
 # File location: .github/workflows/build-kernel-matrix.yml
 # ============================================================================
 
@@ -47,7 +61,7 @@ on:
         type: boolean
         default: true
       build_sukisu:
-        description: "Build SukiSU Ultra (susfs-main)"
+        description: "Build SukiSU Ultra (main)"
         type: boolean
         default: true
       build_resukisu:
@@ -61,14 +75,16 @@ on:
 
 permissions:
   contents: write
-  actions:  write
+  actions: write
   packages: write
 
 env:
   KERNEL_BRANCH: android13-5.15
-  SUSFS_REPO:    https://gitlab.com/simonpunk/susfs4ksu.git
-  SUSFS_BRANCH:  gki-android13-5.15
+  SUSFS_REPO: https://gitlab.com/simonpunk/susfs4ksu.git
+  SUSFS_BRANCH: gki-android13-5.15
   CLANG_VERSION: r584948
+  # FIX 5: Opt-in to Node.js 24 now — GitHub forces this on June 2, 2026.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
 
@@ -77,7 +93,7 @@ jobs:
     name: Resolve build matrix
     runs-on: ubuntu-24.04
     outputs:
-      matrix:   ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
       is_empty: ${{ steps.build-matrix.outputs.is_empty }}
 
     steps:
@@ -88,40 +104,40 @@ jobs:
 
           if [ "${{ inputs.build_ksun }}" = "true" ]; then
             VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{
-              "variant":        "ksun-stable",
-              "display_name":   "KernelSU-Next (stable)",
-              "setup_url":      "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh",
-              "setup_arg":      "stable",
-              "ksu_dir":        "KernelSU-Next",
+              "variant": "ksun-stable",
+              "display_name": "KernelSU-Next (stable)",
+              "setup_url": "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh",
+              "setup_arg": "stable",
+              "ksu_dir": "KernelSU-Next",
               "artifact_prefix":"ksun-stable",
               "skip_drv_patch": "true",
-              "enable_kpm":     "false"
+              "enable_kpm": "false"
             }]')
           fi
 
           if [ "${{ inputs.build_sukisu }}" = "true" ]; then
             VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{
-              "variant":        "sukisu-ultra",
-              "display_name":   "SukiSU Ultra (susfs-main)",
-              "setup_url":      "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh",
-              "setup_arg":      "main",
-              "ksu_dir":        "KernelSU",
+              "variant": "sukisu-ultra",
+              "display_name": "SukiSU Ultra (main)",
+              "setup_url": "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh",
+              "setup_arg": "main",
+              "ksu_dir": "KernelSU",
               "artifact_prefix":"sukisu-susfs",
               "skip_drv_patch": "true",
-              "enable_kpm":     "${{ inputs.enable_kpm }}"
+              "enable_kpm": "${{ inputs.enable_kpm }}"
             }]')
           fi
 
           if [ "${{ inputs.build_resukisu }}" = "true" ]; then
             VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{
-              "variant":        "resukisu",
-              "display_name":   "ReSukiSU (main)",
-              "setup_url":      "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh",
-              "setup_arg":      "main",
-              "ksu_dir":        "KernelSU",
+              "variant": "resukisu",
+              "display_name": "ReSukiSU (main)",
+              "setup_url": "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh",
+              "setup_arg": "main",
+              "ksu_dir": "KernelSU",
               "artifact_prefix":"resukisu",
               "skip_drv_patch": "true",
-              "enable_kpm":     "${{ inputs.enable_kpm }}"
+              "enable_kpm": "${{ inputs.enable_kpm }}"
             }]')
           fi
 
@@ -129,13 +145,13 @@ jobs:
           echo "Selected $COUNT variant(s)."
 
           if [ "$COUNT" -eq 0 ]; then
-            echo "is_empty=true"            >> $GITHUB_OUTPUT
-            echo 'matrix={"include":[]}'   >> $GITHUB_OUTPUT
+            echo "is_empty=true" >> $GITHUB_OUTPUT
+            echo 'matrix={"include":[]}' >> $GITHUB_OUTPUT
             echo "::warning::No variants selected — tick at least one checkbox."
           else
-            echo "is_empty=false"          >> $GITHUB_OUTPUT
+            echo "is_empty=false" >> $GITHUB_OUTPUT
             MATRIX=$(printf '{"include":%s}' "$VARIANTS" | jq -c .)
-            echo "matrix=$MATRIX"          >> $GITHUB_OUTPUT
+            echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           fi
 
   # ── Job 2: Download + cache Clang ONCE before the matrix starts ───────────
@@ -153,7 +169,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: clang-toolchain
-          key:  clang-aosp-${{ env.CLANG_VERSION }}
+          key: clang-aosp-${{ env.CLANG_VERSION }}
 
       - name: Download Clang (cache miss only)
         if: steps.cache-clang.outputs.cache-hit != 'true'
@@ -191,9 +207,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ndutg/kernel_samsung_sm8550-common-ksususfs
-          ref:        ${{ env.KERNEL_BRANCH }}
+          ref: ${{ env.KERNEL_BRANCH }}
           fetch-depth: 1
-          token:      ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # ── 2. Install build dependencies ───────────────────────────────────
       - name: Install build dependencies
@@ -215,7 +231,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: clang-toolchain
-          key:  clang-aosp-${{ env.CLANG_VERSION }}
+          key: clang-aosp-${{ env.CLANG_VERSION }}
           fail-on-cache-miss: true
 
       - name: Verify Clang
@@ -236,9 +252,9 @@ jobs:
           KSU_DIR="${{ matrix.ksu_dir }}"
 
           KSU_TAG=$(git -C "${KSU_DIR}" describe --tags --abbrev=0 2>/dev/null \
-                    || git -C "${KSU_DIR}" tag --list 'v[0-9]*' --sort=-v:refname \
-                       2>/dev/null | head -1 \
-                    || echo "main")
+            || git -C "${KSU_DIR}" tag --list 'v[0-9]*' --sort=-v:refname \
+               2>/dev/null | head -1 \
+            || echo "main")
 
           KPM_SUFFIX=""
           if [ "${{ matrix.enable_kpm }}" = "true" ]; then
@@ -247,13 +263,13 @@ jobs:
 
           BUILD_SUFFIX="${{ matrix.artifact_prefix }}-${KSU_TAG}-kprobes${KPM_SUFFIX}"
 
-          echo "KSU tag     : ${KSU_TAG}"
+          echo "KSU tag : ${KSU_TAG}"
           echo "KPM enabled : ${{ matrix.enable_kpm }}"
           echo "Build suffix: ${BUILD_SUFFIX}"
 
-          echo "KSUDIR=${KSU_DIR}"                                         >> $GITHUB_ENV
-          echo "BUILDSUFFIX=${BUILD_SUFFIX}"                               >> $GITHUB_ENV
-          echo "SUSFSSKIPKSUDRIVERPATCH=${{ matrix.skip_drv_patch }}"     >> $GITHUB_ENV
+          echo "KSUDIR=${KSU_DIR}"            >> $GITHUB_ENV
+          echo "BUILDSUFFIX=${BUILD_SUFFIX}"  >> $GITHUB_ENV
+          echo "SUSFSSKIPKSUDRIVERPATCH=${{ matrix.skip_drv_patch }}" >> $GITHUB_ENV
 
       # ── 5. Install supercall.h for KPM (SukiSU Ultra + ReSukiSU only) ───
       #
@@ -277,7 +293,7 @@ jobs:
           mkdir -p include/uapi
           cp "$SUPERCALL_SRC" include/uapi/supercall.h
           test -f include/uapi/supercall.h \
-            && echo "supercall.h installed → include/uapi/supercall.h" \
+            && echo "supercall.h installed -> include/uapi/supercall.h" \
             || { echo "ERROR: copy failed"; exit 1; }
 
       # ── 6. Apply SUSFS patches ───────────────────────────────────────────
@@ -289,9 +305,9 @@ jobs:
             susfs4ksu \
             || { echo "ERROR: SUSFS clone failed."; exit 1; }
 
-          cp susfs4ksu/kernel_patches/fs/susfs.c                fs/
-          cp susfs4ksu/kernel_patches/include/linux/susfs.h     include/linux/
-          cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
+          cp susfs4ksu/kernel_patches/fs/susfs.c                        fs/
+          cp susfs4ksu/kernel_patches/include/linux/susfs.h             include/linux/
+          cp susfs4ksu/kernel_patches/include/linux/susfs_def.h         include/linux/
 
           patch -p1 --forward \
             < "susfs4ksu/kernel_patches/50_add_susfs_in_${{ env.SUSFS_BRANCH }}.patch" \
@@ -347,15 +363,15 @@ jobs:
       # CONFIG_KSU_SUSFS_ENABLE_LOG    — enable SUSFS kernel logging
       # CONFIG_KSU_SUSFS_OPEN_REDIRECT — redirect open() calls
       # CONFIG_KSU_SUSFS_SUS_SU        — sus_su binary support
-      #                                  (enable for kprobe builds;
-      #                                   disable if using inline hooks)
+      #                                   (enable for kprobe builds;
+      #                                    disable if using inline hooks)
       # CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT — AUTO_ADD support for magic
       #                                    mount managers (KSU/SukiSU)
       #
       # KPM configs (SukiSU Ultra + ReSukiSU only):
-      # CONFIG_KPM            — Kernel Patch Module runtime loader
-      # CONFIG_KALLSYMS       — exports kernel symbol table for KPM
-      # CONFIG_KALLSYMS_ALL   — includes static/local symbols for KPM
+      # CONFIG_KPM          — Kernel Patch Module runtime loader
+      # CONFIG_KALLSYMS     — exports kernel symbol table for KPM
+      # CONFIG_KALLSYMS_ALL — includes static/local symbols for KPM
       - name: Enable SUSFS + KPM kernel configs
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
@@ -424,7 +440,7 @@ jobs:
         with:
           name: >-
             sm8550-${{ steps.meta.outputs.kernelversion }}-${{ env.BUILDSUFFIX }}-susfs-${{ steps.meta.outputs.date }}
-          path:              AnyKernel3
+          path: AnyKernel3
           compression-level: 9
           if-no-files-found: warn
-          overwrite:         false
+          overwrite: false
