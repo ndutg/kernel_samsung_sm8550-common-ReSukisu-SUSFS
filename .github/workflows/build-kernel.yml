@@ -60,7 +60,7 @@ jobs:
           VARIANTS='[]'
 
           if [ "${{ inputs.build_ksun }}" = "true" ]; then
-            VARIANTS=$(echo "$VARIANTS" | jq '. += [{
+            VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{
               "variant":         "ksun-stable",
               "display_name":    "KernelSU-Next (stable)",
               "setup_url":       "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh",
@@ -73,7 +73,7 @@ jobs:
           fi
 
           if [ "${{ inputs.build_sukisu }}" = "true" ]; then
-            VARIANTS=$(echo "$VARIANTS" | jq '. += [{
+            VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{
               "variant":         "sukisu-ultra",
               "display_name":    "SukiSU Ultra (susfs-main) + KPM",
               "setup_url":       "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh",
@@ -86,7 +86,7 @@ jobs:
           fi
 
           if [ "${{ inputs.build_resukisu }}" = "true" ]; then
-            VARIANTS=$(echo "$VARIANTS" | jq '. += [{
+            VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{
               "variant":         "resukisu",
               "display_name":    "ReSukiSU (main) + KPM",
               "setup_url":       "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh",
@@ -103,11 +103,12 @@ jobs:
 
           if [ "$COUNT" -eq 0 ]; then
             echo "is_empty=true"             >> $GITHUB_OUTPUT
-            echo "matrix={\"include\":[]}"   >> $GITHUB_OUTPUT
+            echo 'matrix={"include":[]}' >> $GITHUB_OUTPUT
             echo "::warning::No variants selected — tick at least one checkbox."
           else
             echo "is_empty=false"                        >> $GITHUB_OUTPUT
-            echo "matrix={\"include\":$VARIANTS}"        >> $GITHUB_OUTPUT
+            MATRIX=$(printf '{"include":%s}' "$VARIANTS" | jq -c .)
+            echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           fi
 
 # ── Job 2: Build — one parallel runner per selected variant ─────────────────
