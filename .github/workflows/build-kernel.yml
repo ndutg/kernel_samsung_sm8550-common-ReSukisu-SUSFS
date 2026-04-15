@@ -25,11 +25,15 @@ on:
         type: boolean
         default: true
       build_sukisu:
-        description: "Build SukiSU Ultra (susfs-main) + KPM"
+        description: "Build SukiSU Ultra (susfs-main)"
         type: boolean
         default: true
       build_resukisu:
-        description: "Build ReSukiSU (main) + KPM"
+        description: "Build ReSukiSU (main)"
+        type: boolean
+        default: true
+      enable_kpm:
+        description: "Enable KPM — Kernel Patch Manager (SukiSU Ultra + ReSukiSU only, ignored for KernelSU-Next)"
         type: boolean
         default: true
 
@@ -75,26 +79,26 @@ jobs:
           if [ "${{ inputs.build_sukisu }}" = "true" ]; then
             VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{
               "variant":         "sukisu-ultra",
-              "display_name":    "SukiSU Ultra (susfs-main) + KPM",
+              "display_name":    "SukiSU Ultra (susfs-main)",
               "setup_url":       "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh",
               "setup_arg":       "susfs-main",
               "ksu_dir":         "KernelSU",
               "artifact_prefix": "sukisu-susfs",
               "skip_drv_patch":  "true",
-              "enable_kpm":      "true"
+              "enable_kpm":      "${{ inputs.enable_kpm }}"
             }]')
           fi
 
           if [ "${{ inputs.build_resukisu }}" = "true" ]; then
             VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{
               "variant":         "resukisu",
-              "display_name":    "ReSukiSU (main) + KPM",
+              "display_name":    "ReSukiSU (main)",
               "setup_url":       "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh",
               "setup_arg":       "main",
               "ksu_dir":         "KernelSU",
               "artifact_prefix": "resukisu",
               "skip_drv_patch":  "true",
-              "enable_kpm":      "true"
+              "enable_kpm":      "${{ inputs.enable_kpm }}"
             }]')
           fi
 
