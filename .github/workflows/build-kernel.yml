@@ -144,7 +144,7 @@ jobs:
   # runner gets a cache miss because none has finished saving yet. This job
   # runs first, populates the cache, then the build jobs just restore it.
   prepare-clang:
-    name: Cache Clang ${{ env.CLANG_VERSION }}
+    name: Cache Clang toolchain
     runs-on: ubuntu-24.04
 
     steps:
