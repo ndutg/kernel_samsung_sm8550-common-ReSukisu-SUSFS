@@ -1,93 +1,97 @@
 # ============================================================================
-# SM8550 Kernel Build — Samsung Galaxy S23 Series
-# Base:   reddxae/kernel_samsung_sm8550-common-ksu (android13-5.15)
-# SUSFS:  gitlab.com/simonpunk/susfs4ksu — gki-android13-5.15
-#         (SM8550 kernel source ancestry is android13-5.15 even on OneUI 7)
-#         Last verified: 2026-04-12
-# Clang:  AOSP r584948 (mirror-goog, verified working for this kernel)
-# AK3:    Bundled at .github/goodies/AnyKernel3.zip (pre-configured for SM8550)
+#  SM8550 Kernel Matrix Build
+#  Builds three root variants in parallel — all with SUSFS
 #
-# HOW TO USE:
-#   1. Fork reddxae/kernel_samsung_sm8550-common-ksu
-#   2. Replace .github/workflows/build-kernel.yml with this file
-#   3. Go to Actions → "Build — SM8550 Kernel" → Run workflow
-#   4. Select your root solution and whether to enable SUSFS
+#  Variants:
+#    1. KernelSU-Next  (stable branch)     → ksun-stable-*
+#    2. SukiSU Ultra   (susfs-main branch) → sukisu-susfs-*
+#    3. ReSukiSU       (main branch)       → resukisu-*
 #
-# ROOT SOLUTION NOTES:
-#   ksu-next-stable  → KernelSU-Next stable branch (Kprobes)
-#   ksu-next-dev     → KernelSU-Next dev branch (Kprobes, bleeding edge)
-#   sukisu-ultra     → SukiSU-Ultra (KSU fork; SUSFS hooks built into driver)
-#   kernelsu-tiann   → Original KernelSU by tiann (Kprobes)
-#   apatch           → No KSU driver; flash output then patch boot.img via APatch app
-#   none             → Plain kernel, no root integration
+#  All three variants ship SUSFS driver integration on their respective
+#  branches, so SUSFS_SKIP_KSU_DRIVER_PATCH=true for all.
+#  The kernel-side fs/ SUSFS patch (50addsusfsin*.patch) is always applied.
 #
-# SUSFS + KSU-NEXT ARCHITECTURE NOTE (important):
-#   The 10_enable_susfs_for_ksu.patch from the SUSFS repo was written against
-#   an older version of KSU-Next that had feature/sulog.o in Kbuild.
-#   Current KSU-Next stable/dev replaced that with tiny_sulog.o and restructured
-#   the driver — the patch context no longer matches, causing hunk failures.
+#  Artifact naming:
+#    sm8550-<kernelver>-<variant>-<ksu-tag>-kprobes-susfs-<date>
 #
-#   KSU-Next (stable AND dev) already ships susfsd.rs — a built-in userspace
-#   SUSFS daemon that communicates with the kernel SUSFS layer directly via
-#   syscalls. The driver-level patch is not needed and must not be applied.
-#
-#   For ALL variants: only kernel-level SUSFS patches are applied:
-#     - 50_add_susfs_in_gki-android13-5.15.patch  (wires SUSFS into kernel fs/)
-#     - fs/susfs.c + include/linux/susfs.h + susfs_def.h  (source files)
-#   The 10_enable_susfs_for_ksu.patch is SKIPPED for every variant.
+#  File location in your repo: .github/workflows/build-kernel-matrix.yml
 # ============================================================================
 
-name: Build — SM8550 Kernel (S23 Series)
-
-run-name: >-
-  ${{
-    inputs.root_solution == 'ksu-next-stable' && 'KSU-Next (stable)'  ||
-    inputs.root_solution == 'ksu-next-dev'    && 'KSU-Next (dev)'     ||
-    inputs.root_solution == 'sukisu-ultra'    && 'SukiSU-Ultra'       ||
-    inputs.root_solution == 'kernelsu-tiann'  && 'KernelSU (tiann)'   ||
-    inputs.root_solution == 'apatch'          && 'APatch-ready'        ||
-    'Plain kernel'
-  }} | SUSFS=${{ inputs.enable_susfs }}
+name: Build SM8550 Kernel — KSU Matrix
 
 on:
   workflow_dispatch:
-    inputs:
-      root_solution:
-        description: 'Root solution to integrate'
-        required: true
-        type: choice
-        default: 'ksu-next-stable'
-        options:
-          - ksu-next-stable
-          - ksu-next-dev
-          - sukisu-ultra
-          - kernelsu-tiann
-          - apatch
-          - none
-      enable_susfs:
-        description: 'Apply SUSFS patches (gki-android13-5.15, verified 2026-04-12)'
-        required: true
-        type: boolean
-        default: true
+
+permissions:
+  contents: write
+  actions:  write
+  packages: write
 
 env:
-  SUSFS_REPO:   https://gitlab.com/simonpunk/susfs4ksu.git
-  SUSFS_BRANCH: gki-android13-5.15
+  KERNEL_REPO:   https://github.com/ndutg/kernel_samsung_sm8550-common-ksususfs
+  KERNEL_BRANCH: android13-5.15
+  SUSFS_REPO:    https://gitlab.com/simonpunk/susfs4ksu.git
+  SUSFS_BRANCH:  gki-android13-5.15
+  CLANG_VERSION: r584948
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.display_name }}
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false          # don't cancel siblings if one variant fails
+      matrix:
+        include:
+
+          # ── 1. KernelSU-Next stable ─────────────────────────────────────
+          - variant:         ksun-stable
+            display_name:    "KernelSU-Next (stable)"
+            setup_url:       "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh"
+            setup_arg:       stable
+            ksu_dir:         KernelSU-Next
+            artifact_prefix: ksun-stable
+            skip_drv_patch:  "true"
+            # KSU-Next ships susfsd.rs daemon built-in on stable branch.
+            # sulog.o renamed to tinysulog.o — driver patch would conflict.
+
+          # ── 2. SukiSU Ultra (susfs-main) ────────────────────────────────
+          - variant:         sukisu-ultra
+            display_name:    "SukiSU Ultra (susfs-main)"
+            setup_url:       "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh"
+            setup_arg:       susfs-main
+            ksu_dir:         KernelSU
+            artifact_prefix: sukisu-susfs
+            skip_drv_patch:  "true"
+            # susfs-main branch has SUSFS driver integration built-in.
+            # Kernel-side fs/ patch (50addsusfsin*.patch) still applied below.
+
+          # ── 3. ReSukiSU (main) ──────────────────────────────────────────
+          - variant:         resukisu
+            display_name:    "ReSukiSU (main)"
+            setup_url:       "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh"
+            setup_arg:       main
+            ksu_dir:         KernelSU
+            artifact_prefix: resukisu
+            skip_drv_patch:  "true"
+            # ReSukiSU is derived from SukiSU Ultra — SUSFS driver built-in.
+            # NOTE: If this variant fails at setup, verify that ReSukiSU's
+            # main branch includes SUSFS. If not, change setup_arg to
+            # "susfs-main" (if that branch exists in their repo).
 
     steps:
-      # ── Checkout ──────────────────────────────────────────────────────────────
-      - name: Clone kernel source
+
+      # ── Step 1: Checkout kernel source ──────────────────────────────────
+      - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
-          ref: android13-5.15
-          fetch-depth: '1'
+          repository: ndutg/kernel_samsung_sm8550-common-ksususfs
+          ref:         ${{ env.KERNEL_BRANCH }}
+          fetch-depth: 1
+          token:       ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Toolchain ─────────────────────────────────────────────────────────────
-      - name: Set up build environment
+      # ── Step 2: Install build dependencies + AOSP Clang r584948 ─────────
+      - name: Install dependencies and Clang ${{ env.CLANG_VERSION }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -98,177 +102,139 @@ jobs:
             lzop zlib1g-dev pahole dwarves cpio zip \
             python3 python-is-python3 tar perl lz4 jq
 
-          # AOSP Clang r584948 — mirror-goog URL, verified for android13-5.15
-          echo "[*] Downloading AOSP Clang r584948..."
+          echo "Downloading AOSP Clang ${{ env.CLANG_VERSION }}..."
           curl -sSfL --retry 3 --connect-timeout 20 \
             -o clang.tar.gz \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r584948.tar.gz" || \
-            { echo "ERROR: Failed to download AOSP Clang r584948. Aborting."; exit 1; }
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-${{ env.CLANG_VERSION }}.tar.gz" \
+          || { echo "ERROR: Failed to download AOSP Clang ${{ env.CLANG_VERSION }}. Aborting."; exit 1; }
 
           mkdir -p clang-toolchain
           tar -xf clang.tar.gz -C clang-toolchain
           rm -f clang.tar.gz
 
-      # ── Root solution integration ─────────────────────────────────────────────
-      # Each block sets $KSU_DIR (cloned repo dir on disk) and $BUILD_SUFFIX.
-      # SUSFS_SKIP_KSU_DRIVER_PATCH is set to true for every variant because
-      # 10_enable_susfs_for_ksu.patch is incompatible with current KSU-Next,
-      # SukiSU-Ultra, and tiann/KernelSU driver structures (see header above).
-
-      - name: Integrate KernelSU-Next — stable
-        if: inputs.root_solution == 'ksu-next-stable'
+      # ── Step 3: Setup KSU variant (matrix-driven) ────────────────────────
+      # Each setup.sh clones the respective KSU repo, symlinks the driver
+      # into the kernel tree, and modifies Makefile + Kconfig automatically.
+      - name: Setup ${{ matrix.display_name }}
+        id: ksu
         run: |
-          echo "[*] KernelSU-Next stable..."
-          (curl -sSfL --retry 3 --connect-timeout 10 \
-            "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh" || \
-            { echo "ERROR: Failed to fetch KernelSU-Next stable setup.sh."; exit 1; }) | bash -s stable
+          echo "==> Setting up ${{ matrix.display_name }}..."
+          curl -sSfL --retry 3 --connect-timeout 20 \
+            "${{ matrix.setup_url }}" \
+            | bash -s "${{ matrix.setup_arg }}" \
+          || { echo "ERROR: Failed to fetch or run setup.sh for ${{ matrix.display_name }}."; exit 1; }
 
-          KSU_TAG="$(git -C KernelSU-Next tag --list 'v*.[0-9]' --sort=-v:refname | head -1)"
-          echo "KSU_DIR=KernelSU-Next"                         >> $GITHUB_ENV
-          echo "BUILD_SUFFIX=ksun-stable-${KSU_TAG}-kprobes"   >> $GITHUB_ENV
-          # KSU-Next ships susfsd.rs (built-in SUSFS daemon via syscall interface).
-          # 10_enable_susfs_for_ksu.patch context does not match current stable
-          # driver (feature/sulog.o renamed to tiny_sulog.o, structure changed).
-          echo "SUSFS_SKIP_KSU_DRIVER_PATCH=true"              >> $GITHUB_ENV
+          KSU_DIR="${{ matrix.ksu_dir }}"
 
-      - name: Integrate KernelSU-Next — dev
-        if: inputs.root_solution == 'ksu-next-dev'
+          # Detect version tag from the cloned KSU directory
+          if [ -d "${KSU_DIR}" ]; then
+            KSU_TAG=$(git -C "${KSU_DIR}" tag --list 'v[0-9]*' \
+                          --sort=-v:refname 2>/dev/null | head -1 || true)
+            KSU_NUMERIC=$(grep -rh 'KSU_VERSION\b\|KERNELSU_VERSION\b' \
+                              "${KSU_DIR}/kernel/ksu.h" \
+                              "${KSU_DIR}/kernel/version.h" 2>/dev/null \
+                          | grep -oP '\b[0-9]{4,5}\b' | head -1 || true)
+          fi
+          [ -z "${KSU_TAG:-}" ]     && KSU_TAG="$(git -C "${KSU_DIR}" describe --tags --abbrev=0 2>/dev/null || echo main)"
+          [ -z "${KSU_NUMERIC:-}" ] && KSU_NUMERIC="$(git -C "${KSU_DIR}" rev-list --count HEAD 2>/dev/null || echo 0)"
+
+          BUILD_SUFFIX="${{ matrix.artifact_prefix }}-${KSU_TAG}-kprobes"
+
+          echo "KSU tag     : ${KSU_TAG}"
+          echo "KSU numeric : ${KSU_NUMERIC}"
+          echo "Build suffix: ${BUILD_SUFFIX}"
+
+          echo "KSUDIR=${KSU_DIR}"                                    >> $GITHUB_ENV
+          echo "BUILDSUFFIX=${BUILD_SUFFIX}"                          >> $GITHUB_ENV
+          echo "SUSFSSKIPKSUDRIVERPATCH=${{ matrix.skip_drv_patch }}" >> $GITHUB_ENV
+
+      # ── Step 4: Apply SUSFS kernel patches ───────────────────────────────
+      # Two patches live in the SUSFS repo:
+      #   50addsusfsin<branch>.patch — hooks into kernel fs/ code (ALWAYS applied)
+      #   10-enable_susfs_for_ksu.patch — hooks into KSU driver code
+      #                                   (SKIPPED for all: built-in on each branch)
+      - name: Apply SUSFS patches
         run: |
-          echo "[*] KernelSU-Next dev..."
-          (curl -sSfL --retry 3 --connect-timeout 10 \
-            "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/dev/kernel/setup.sh" || \
-            { echo "ERROR: Failed to fetch KernelSU-Next dev setup.sh."; exit 1; }) | bash -s dev
+          echo "==> Cloning SUSFS (branch: ${{ env.SUSFS_BRANCH }})..."
+          git clone --depth 1 \
+            "${{ env.SUSFS_REPO }}" \
+            -b "${{ env.SUSFS_BRANCH }}" \
+            susfs4ksu \
+          || { echo "ERROR: Failed to clone SUSFS from GitLab. Aborting."; exit 1; }
 
-          COMMIT_COUNT="$(git -C KernelSU-Next rev-list --count HEAD)"
-          KSU_VERSION="$((30000 + ${COMMIT_COUNT:-0}))"
-          echo "KSU_DIR=KernelSU-Next"                         >> $GITHUB_ENV
-          echo "BUILD_SUFFIX=ksun-dev-${KSU_VERSION}-kprobes"  >> $GITHUB_ENV
-          # Same reasoning as stable — susfsd.rs handles SUSFS, driver patch obsolete.
-          echo "SUSFS_SKIP_KSU_DRIVER_PATCH=true"              >> $GITHUB_ENV
+          # 4a: Copy SUSFS source files into kernel tree
+          echo "Copying SUSFS source files..."
+          cp susfs4ksu/kernel/patches/fs/susfs.c               fs/
+          cp susfs4ksu/kernel/patches/include/linux/susfs.h     include/linux/
+          cp susfs4ksu/kernel/patches/include/linux/susfs_def.h include/linux/
 
-      - name: Integrate SukiSU-Ultra
-        if: inputs.root_solution == 'sukisu-ultra'
-        run: |
-          echo "[*] SukiSU-Ultra..."
-          (curl -sSfL --retry 3 --connect-timeout 10 \
-            "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" || \
-            { echo "ERROR: Failed to fetch SukiSU-Ultra setup.sh."; exit 1; }) | bash -s main
-
-          SUKI_TAG="$(git -C KernelSU tag --list 'v*' --sort=-v:refname | head -1)"
-          echo "KSU_DIR=KernelSU"                              >> $GITHUB_ENV
-          echo "BUILD_SUFFIX=sukisu-${SUKI_TAG}"               >> $GITHUB_ENV
-          # SukiSU-Ultra has SUSFS hooks built directly into its driver.
-          # Applying 10_enable_susfs_for_ksu.patch would conflict.
-          echo "SUSFS_SKIP_KSU_DRIVER_PATCH=true"              >> $GITHUB_ENV
-
-      - name: Integrate KernelSU — tiann/original
-        if: inputs.root_solution == 'kernelsu-tiann'
-        run: |
-          echo "[*] KernelSU (tiann/original)..."
-          (curl -sSfL --retry 3 --connect-timeout 10 \
-            "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" || \
-            { echo "ERROR: Failed to fetch tiann/KernelSU setup.sh."; exit 1; }) | bash -s main
-
-          KSU_TAG="$(git -C KernelSU tag --list 'v*' --sort=-v:refname | head -1)"
-          echo "KSU_DIR=KernelSU"                              >> $GITHUB_ENV
-          echo "BUILD_SUFFIX=kernelsu-tiann-${KSU_TAG}"        >> $GITHUB_ENV
-          # 10_enable_susfs_for_ksu.patch was written for KSU-Next's architecture,
-          # not tiann/KernelSU. Applying it to this driver would corrupt it.
-          echo "SUSFS_SKIP_KSU_DRIVER_PATCH=true"              >> $GITHUB_ENV
-
-      - name: Set APatch build suffix
-        if: inputs.root_solution == 'apatch'
-        run: |
-          # APatch patches the kernel binary post-build via the APatch app
-          # (bmax121/APatch, latest: v11142). No driver integrated at build time.
-          # Flash this AnyKernel3 zip, then run APatch app to patch boot.img.
-          # If SUSFS is enabled, the compiled kernel has full SUSFS support.
-          echo "BUILD_SUFFIX=apatch-ready"                     >> $GITHUB_ENV
-
-      - name: Set plain kernel build suffix
-        if: inputs.root_solution == 'none'
-        run: |
-          echo "BUILD_SUFFIX=plain"                            >> $GITHUB_ENV
-
-      # ── SUSFS kernel patching ─────────────────────────────────────────────────
-      # Applies kernel-level SUSFS patches ONLY.
-      # The KSU driver patch (10_enable_susfs_for_ksu.patch) is NOT applied to
-      # any variant — see header and individual step comments above for reasons.
-      # Skipped when root_solution == 'none' OR enable_susfs is false.
-
-      - name: Apply SUSFS kernel patches
-        if: inputs.enable_susfs && inputs.root_solution != 'none'
-        run: |
-          echo "[*] Cloning SUSFS repo (branch: ${SUSFS_BRANCH})..."
-          git clone --depth=1 \
-            "${SUSFS_REPO}" \
-            -b "${SUSFS_BRANCH}" \
-            susfs4ksu || \
-            { echo "ERROR: Failed to clone SUSFS from GitLab. Aborting."; exit 1; }
-
-          # Step 1: Copy SUSFS source files into kernel tree
-          echo "[*] Copying SUSFS source files..."
-          cp susfs4ksu/kernel_patches/fs/susfs.c                 fs/
-          cp susfs4ksu/kernel_patches/include/linux/susfs.h      include/linux/
-          cp susfs4ksu/kernel_patches/include/linux/susfs_def.h  include/linux/
-
-          # Step 2: Apply main SUSFS kernel patch
-          # Patches fs/Makefile and fs/Kconfig to wire SUSFS into the build,
-          # and adds kernel hooks for path/mount hiding.
-          # If this fails, the Samsung kernel tree has a conflict with the patch.
-          echo "[*] Applying 50_add_susfs_in_${SUSFS_BRANCH}.patch..."
+          # 4b: Apply main SUSFS kernel patch (wires fs/ hooks)
+          echo "Applying 50addsusfsin${{ env.SUSFS_BRANCH }}.patch..."
           patch -p1 --forward \
-            < "susfs4ksu/kernel_patches/50_add_susfs_in_${SUSFS_BRANCH}.patch" || \
-            { echo "ERROR: Main SUSFS kernel patch failed. Possible conflict with Samsung tree."; exit 1; }
+            < "susfs4ksu/kernel/patches/50addsusfsin${{ env.SUSFS_BRANCH }}.patch" \
+          || { echo "ERROR: Main SUSFS kernel patch failed — possible conflict with Samsung tree."; exit 1; }
 
-          # Step 3: KSU driver patch — intentionally skipped for all variants.
-          # Reason documented in workflow header and each root solution step above.
-          echo "[*] KSU driver patch skipped — not applicable for any current variant."
+          # 4c: KSU driver patch — intentionally skipped for all three variants
+          if [ "${SUSFSSKIPKSUDRIVERPATCH}" = "true" ]; then
+            echo "KSU driver patch skipped — ${{ matrix.display_name }} has SUSFS built-in."
+          else
+            echo "Applying 10-enable_susfs_for_ksu.patch..."
+            patch -p1 --forward \
+              < "susfs4ksu/kernel/patches/10-enable_susfs_for_ksu.patch" \
+            || { echo "ERROR: KSU driver patch failed."; exit 1; }
+          fi
 
           rm -rf susfs4ksu
-          echo "[+] SUSFS kernel patching complete."
+          echo "==> SUSFS kernel patching complete."
 
-      # ── Build metadata ────────────────────────────────────────────────────────
-      - name: Compute build metadata
+      # ── Step 5: Resolve kernel version + build date ──────────────────────
+      - name: Get kernel version and date
         id: meta
         run: |
-          echo "kernel_version=$(make kernelversion | awk '/^[0-9]/ {print $1}')" >> $GITHUB_OUTPUT
-          echo "date=$(date +%Y%m%d)"                                              >> $GITHUB_OUTPUT
+          KVER=$(make kernelversion 2>/dev/null | awk -F. '{print $1"."$2"."$3}')
+          echo "kernelversion=${KVER}" >> $GITHUB_OUTPUT
+          echo "date=$(date +%Y%m%d)"  >> $GITHUB_OUTPUT
+          echo "Kernel version: ${KVER}"
 
-      # ── Swap ──────────────────────────────────────────────────────────────────
-      - name: Set up swap space
+      # ── Step 6: Expand swap to 24 GB ─────────────────────────────────────
+      - name: Set up swap (24 GB)
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 24
 
-      # ── Compile ───────────────────────────────────────────────────────────────
-      - name: Compile kernel
+      # ── Step 7: Generate defconfig + compile kernel ───────────────────────
+      - name: Build kernel (${{ matrix.display_name }})
         run: |
-          export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:$PATH"
+          export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
 
-          echo "[*] Generating defconfig (gki_defconfig)..."
-          make -j"$(nproc --all)" O=out ARCH=arm64 \
-            CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
+          echo "==> Generating defconfig gki_defconfig..."
+          make -j$(nproc --all) O=out ARCH=arm64 \
+            CC=clang LD=ld.lld LLVM=1 LLVMIAS=1 \
             gki_defconfig
 
-          echo "[*] Building kernel..."
-          make -j"$(nproc --all)" O=out ARCH=arm64 \
-            CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1
+          echo "==> Building kernel: ${{ matrix.display_name }} [${BUILDSUFFIX}]..."
+          make -j$(nproc --all) O=out ARCH=arm64 \
+            CC=clang LD=ld.lld LLVM=1 LLVMIAS=1
 
-      # ── Package ───────────────────────────────────────────────────────────────
-      - name: Package with AnyKernel3
+          echo "==> Build complete."
+
+      # ── Step 8: Package with AnyKernel3 ──────────────────────────────────
+      # AnyKernel3.zip is pre-configured in .github/goodies:
+      #   device check disabled, slot=auto — works for all SM8550 variants.
+      - name: Package AnyKernel3 ZIP
         run: |
-          # AnyKernel3.zip bundled in repo at .github/goodies/ — pre-configured
-          # for SM8550 (device check disabled, slot=auto).
           cp .github/goodies/AnyKernel3.zip .
-          unzip AnyKernel3.zip -d AnyKernel3/
+          unzip AnyKernel3.zip -d AnyKernel3
           cp out/arch/arm64/boot/Image.gz AnyKernel3/
 
-      # ── Upload ────────────────────────────────────────────────────────────────
-      - name: Upload flashable zip
+      # ── Step 9: Upload artifact ───────────────────────────────────────────
+      # Artifact name: sm8550-<kernelver>-<variant>-<ksu-tag>-kprobes-susfs-<date>
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: >-
-            sm8550_${{ steps.meta.outputs.kernel_version }}_${{ env.BUILD_SUFFIX }}_susfs-${{ inputs.enable_susfs }}_${{ steps.meta.outputs.date }}
-          path: AnyKernel3/
+            sm8550-${{ steps.meta.outputs.kernelversion }}-${{ env.BUILDSUFFIX }}-susfs-${{ steps.meta.outputs.date }}
+          path:              AnyKernel3
           compression-level: 9
+          if-no-files-found: warn
+          overwrite:         false
