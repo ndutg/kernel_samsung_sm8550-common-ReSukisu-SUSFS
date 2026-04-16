@@ -2,9 +2,9 @@
 # SM8550 Kernel Matrix Build — Selectable Variants + Clang Cache + KPM
 #
 # Variants:
-#   1. KernelSU-Next (stable v3.2.0+) -> no KPM (not supported upstream)
-#   2. SukiSU Ultra  (main  v4.1.2+)  -> KPM enabled
-#   3. ReSukiSU      (main  v4.1.0+)  -> KPM enabled
+#   1. KernelSU-Next (stable v3.2.0+)  -> no KPM (not supported upstream)
+#   2. SukiSU Ultra  (main v4.1.2+)    -> KPM enabled
+#   3. ReSukiSU      (main v4.1.0+)    -> KPM enabled
 #
 # KPM requires: CONFIG_KPM=y + CONFIG_KALLSYMS=y + CONFIG_KALLSYMS_ALL=y
 # Applied via scripts/config after defconfig, then olddefconfig to resolve deps.
@@ -13,9 +13,9 @@
 # restore in ~30 s.
 #
 # Last verified: April 2026
-#   KernelSU-Next : v3.2.0  (2026-04-14) — stable branch  (HTTP 200)
-#   SukiSU Ultra  : v4.1.2  (2026-03-09) — main branch    (HTTP 200)
-#   ReSukiSU      : v4.1.0  (latest tag) — main branch    (HTTP 200)
+#   KernelSU-Next : v3.2.0 (2026-04-14) — stable branch (HTTP 200)
+#   SukiSU Ultra  : v4.1.2 (2026-03-09) — main branch  (HTTP 200)
+#   ReSukiSU      : v4.1.0 (latest tag)  — main branch  (HTTP 200)
 #   SUSFS4KSU     : gki-android13-5.15   — gitlab.com/simonpunk/susfs4ksu
 #   AOSP Clang    : r584948 (confirmed working in CI)
 #
@@ -24,10 +24,16 @@
 #   cache. Each build job then uses actions/cache/restore (restore-only) so
 #   they never race to save the same key simultaneously.
 #
-# FIX 2 — supercall.h not found (KPM build fatal error):
+# FIX 2 — supercall.h + app_profile.h not found (KPM build fatal error):
 #   kpm.h does: #include <uapi/supercall.h>
-#   That header lives inside the KSU tree but is never copied to the kernel
-#   include path. A new step copies it to include/uapi/ before compilation.
+#   supercall.h does: #include "uapi/app_profile.h"
+#   Both headers ship inside the KSU tree under uapi/ but setup.sh never
+#   copies them onto the kernel's include path, causing:
+#     fatal error: 'uapi/app_profile.h' file not found
+#   The install step now copies BOTH headers to include/uapi/ before
+#   compilation. Verified against SukiSU-Ultra/SukiSU-Ultra@main tree:
+#     uapi/supercall.h   -> include/uapi/supercall.h
+#     uapi/app_profile.h -> include/uapi/app_profile.h
 #
 # FIX 3 — SukiSU Ultra setup_arg 'susfs-main' branch does not exist:
 #   Changed to 'main' (the actual default branch). The old value caused a
@@ -88,12 +94,12 @@ env:
 
 jobs:
 
-  # ── Job 1: Resolve build matrix from checkbox choices ─────────────────────
+# ── Job 1: Resolve build matrix from checkbox choices ─────────────────────
   setup:
     name: Resolve build matrix
     runs-on: ubuntu-24.04
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix:   ${{ steps.build-matrix.outputs.matrix }}
       is_empty: ${{ steps.build-matrix.outputs.is_empty }}
 
     steps:
@@ -104,40 +110,40 @@ jobs:
 
           if [ "${{ inputs.build_ksun }}" = "true" ]; then
             VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{
-              "variant": "ksun-stable",
-              "display_name": "KernelSU-Next (stable)",
-              "setup_url": "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh",
-              "setup_arg": "stable",
-              "ksu_dir": "KernelSU-Next",
+              "variant":        "ksun-stable",
+              "display_name":   "KernelSU-Next (stable)",
+              "setup_url":      "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh",
+              "setup_arg":      "stable",
+              "ksu_dir":        "KernelSU-Next",
               "artifact_prefix":"ksun-stable",
               "skip_drv_patch": "true",
-              "enable_kpm": "false"
+              "enable_kpm":     "false"
             }]')
           fi
 
           if [ "${{ inputs.build_sukisu }}" = "true" ]; then
             VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{
-              "variant": "sukisu-ultra",
-              "display_name": "SukiSU Ultra (main)",
-              "setup_url": "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh",
-              "setup_arg": "main",
-              "ksu_dir": "KernelSU",
+              "variant":        "sukisu-ultra",
+              "display_name":   "SukiSU Ultra (main)",
+              "setup_url":      "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh",
+              "setup_arg":      "main",
+              "ksu_dir":        "KernelSU",
               "artifact_prefix":"sukisu-susfs",
               "skip_drv_patch": "true",
-              "enable_kpm": "${{ inputs.enable_kpm }}"
+              "enable_kpm":     "${{ inputs.enable_kpm }}"
             }]')
           fi
 
           if [ "${{ inputs.build_resukisu }}" = "true" ]; then
             VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{
-              "variant": "resukisu",
-              "display_name": "ReSukiSU (main)",
-              "setup_url": "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh",
-              "setup_arg": "main",
-              "ksu_dir": "KernelSU",
+              "variant":        "resukisu",
+              "display_name":   "ReSukiSU (main)",
+              "setup_url":      "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh",
+              "setup_arg":      "main",
+              "ksu_dir":        "KernelSU",
               "artifact_prefix":"resukisu",
               "skip_drv_patch": "true",
-              "enable_kpm": "${{ inputs.enable_kpm }}"
+              "enable_kpm":     "${{ inputs.enable_kpm }}"
             }]')
           fi
 
@@ -145,7 +151,7 @@ jobs:
           echo "Selected $COUNT variant(s)."
 
           if [ "$COUNT" -eq 0 ]; then
-            echo "is_empty=true" >> $GITHUB_OUTPUT
+            echo "is_empty=true"  >> $GITHUB_OUTPUT
             echo 'matrix={"include":[]}' >> $GITHUB_OUTPUT
             echo "::warning::No variants selected — tick at least one checkbox."
           else
@@ -154,11 +160,11 @@ jobs:
             echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           fi
 
-  # ── Job 2: Download + cache Clang ONCE before the matrix starts ───────────
-  #
-  # FIX 1: With parallel matrix jobs all starting at the same time, every
-  # runner gets a cache miss because none has finished saving yet. This job
-  # runs first, populates the cache, then the build jobs just restore it.
+# ── Job 2: Download + cache Clang ONCE before the matrix starts ───────────
+#
+# FIX 1: With parallel matrix jobs all starting at the same time, every
+# runner gets a cache miss because none has finished saving yet. This job
+# runs first, populates the cache, then the build jobs just restore it.
   prepare-clang:
     name: Cache Clang toolchain
     runs-on: ubuntu-24.04
@@ -169,7 +175,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: clang-toolchain
-          key: clang-aosp-${{ env.CLANG_VERSION }}
+          key:  clang-aosp-${{ env.CLANG_VERSION }}
 
       - name: Download Clang (cache miss only)
         if: steps.cache-clang.outputs.cache-hit != 'true'
@@ -189,7 +195,7 @@ jobs:
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
           clang --version || { echo "ERROR: clang binary not found."; exit 1; }
 
-  # ── Job 3: Build — one parallel runner per selected variant ───────────────
+# ── Job 3: Build — one parallel runner per selected variant ───────────────
   build:
     name: ${{ matrix.display_name }}
     needs: [setup, prepare-clang]
@@ -207,9 +213,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ndutg/kernel_samsung_sm8550-common-ksususfs
-          ref: ${{ env.KERNEL_BRANCH }}
+          ref:        ${{ env.KERNEL_BRANCH }}
           fetch-depth: 1
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token:      ${{ secrets.GITHUB_TOKEN }}
 
       # ── 2. Install build dependencies ───────────────────────────────────
       - name: Install build dependencies
@@ -231,7 +237,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: clang-toolchain
-          key: clang-aosp-${{ env.CLANG_VERSION }}
+          key:  clang-aosp-${{ env.CLANG_VERSION }}
           fail-on-cache-miss: true
 
       - name: Verify Clang
@@ -263,38 +269,74 @@ jobs:
 
           BUILD_SUFFIX="${{ matrix.artifact_prefix }}-${KSU_TAG}-kprobes${KPM_SUFFIX}"
 
-          echo "KSU tag : ${KSU_TAG}"
-          echo "KPM enabled : ${{ matrix.enable_kpm }}"
-          echo "Build suffix: ${BUILD_SUFFIX}"
+          echo "KSU tag      : ${KSU_TAG}"
+          echo "KPM enabled  : ${{ matrix.enable_kpm }}"
+          echo "Build suffix : ${BUILD_SUFFIX}"
 
-          echo "KSUDIR=${KSU_DIR}"            >> $GITHUB_ENV
-          echo "BUILDSUFFIX=${BUILD_SUFFIX}"  >> $GITHUB_ENV
+          echo "KSUDIR=${KSU_DIR}"                               >> $GITHUB_ENV
+          echo "BUILDSUFFIX=${BUILD_SUFFIX}"                     >> $GITHUB_ENV
           echo "SUSFSSKIPKSUDRIVERPATCH=${{ matrix.skip_drv_patch }}" >> $GITHUB_ENV
 
-      # ── 5. Install supercall.h for KPM (SukiSU Ultra + ReSukiSU only) ───
+      # ── 5. Install KPM uapi headers (SukiSU Ultra + ReSukiSU only) ──────
       #
-      # FIX 2: drivers/kernelsu/kpm/kpm.h does #include <uapi/supercall.h>
-      # That header ships inside the KSU tree but setup.sh never copies it
-      # onto the kernel's include path, causing:
-      #   fatal error: uapi/supercall.h file not found
-      - name: Install supercall.h for KPM
+      # FIX 2: The KPM include chain is:
+      #   drivers/kernelsu/kpm/kpm.c
+      #     -> drivers/kernelsu/kpm/kpm.h
+      #       -> include/uapi/supercall.h        (copied here previously)
+      #         -> "uapi/app_profile.h"           (NEW — added in v4.1.2+)
+      #
+      # SukiSU-Ultra ships BOTH headers together in its uapi/ directory:
+      #   KernelSU/uapi/supercall.h   -> include/uapi/supercall.h
+      #   KernelSU/uapi/app_profile.h -> include/uapi/app_profile.h
+      #
+      # setup.sh clones the KSU tree but never copies either header into
+      # the kernel include path. Without app_profile.h the build fails with:
+      #   fatal error: 'uapi/app_profile.h' file not found
+      #
+      # This step copies the entire uapi/*.h set so future header additions
+      # in SukiSU-Ultra are also picked up automatically.
+      - name: Install KPM uapi headers
         if: matrix.enable_kpm == 'true'
         run: |
-          echo "==> Locating supercall.h in ${{ matrix.ksu_dir }} tree..."
-          SUPERCALL_SRC=$(find "${{ matrix.ksu_dir }}" -name "supercall.h" 2>/dev/null | head -1)
+          KSU_DIR="${{ matrix.ksu_dir }}"
+          echo "==> Installing KPM uapi headers from ${KSU_DIR}/uapi/ ..."
+          mkdir -p include/uapi
 
-          if [ -z "$SUPERCALL_SRC" ]; then
-            echo "ERROR: supercall.h not found under ${{ matrix.ksu_dir }}/"
-            find "${{ matrix.ksu_dir }}" -maxdepth 5 -name "*.h" | head -30 || true
-            exit 1
+          # Preferred: copy the whole uapi/ directory if it exists
+          if [ -d "${KSU_DIR}/uapi" ]; then
+            echo "Found ${KSU_DIR}/uapi/ — copying all headers..."
+            cp "${KSU_DIR}/uapi/"*.h include/uapi/
+            echo "Installed headers:"
+            ls include/uapi/*.h
+          else
+            # Fallback: find and copy individually (older tree layout)
+            echo "No uapi/ dir found — falling back to find-and-copy..."
+
+            SUPERCALL_SRC=$(find "${KSU_DIR}" -name "supercall.h" 2>/dev/null | head -1)
+            if [ -z "$SUPERCALL_SRC" ]; then
+              echo "ERROR: supercall.h not found under ${KSU_DIR}/"
+              find "${KSU_DIR}" -maxdepth 6 -name "*.h" | head -30 || true
+              exit 1
+            fi
+            cp "$SUPERCALL_SRC" include/uapi/supercall.h
+            echo "supercall.h installed -> include/uapi/supercall.h"
+
+            APP_PROFILE_SRC=$(find "${KSU_DIR}" -name "app_profile.h" 2>/dev/null | head -1)
+            if [ -z "$APP_PROFILE_SRC" ]; then
+              echo "ERROR: app_profile.h not found under ${KSU_DIR}/"
+              find "${KSU_DIR}" -maxdepth 6 -name "*.h" | head -30 || true
+              exit 1
+            fi
+            cp "$APP_PROFILE_SRC" include/uapi/app_profile.h
+            echo "app_profile.h installed -> include/uapi/app_profile.h"
           fi
 
-          echo "Found: $SUPERCALL_SRC"
-          mkdir -p include/uapi
-          cp "$SUPERCALL_SRC" include/uapi/supercall.h
-          test -f include/uapi/supercall.h \
-            && echo "supercall.h installed -> include/uapi/supercall.h" \
-            || { echo "ERROR: copy failed"; exit 1; }
+          # Verify both required headers are present
+          for HDR in supercall.h app_profile.h; do
+            test -f "include/uapi/${HDR}" \
+              && echo "OK: include/uapi/${HDR}" \
+              || { echo "ERROR: include/uapi/${HDR} missing after install"; exit 1; }
+          done
 
       # ── 6. Apply SUSFS patches ───────────────────────────────────────────
       - name: Apply SUSFS patches
@@ -305,9 +347,9 @@ jobs:
             susfs4ksu \
             || { echo "ERROR: SUSFS clone failed."; exit 1; }
 
-          cp susfs4ksu/kernel_patches/fs/susfs.c                        fs/
-          cp susfs4ksu/kernel_patches/include/linux/susfs.h             include/linux/
-          cp susfs4ksu/kernel_patches/include/linux/susfs_def.h         include/linux/
+          cp susfs4ksu/kernel_patches/fs/susfs.c                       fs/
+          cp susfs4ksu/kernel_patches/include/linux/susfs.h            include/linux/
+          cp susfs4ksu/kernel_patches/include/linux/susfs_def.h        include/linux/
 
           patch -p1 --forward \
             < "susfs4ksu/kernel_patches/50_add_susfs_in_${{ env.SUSFS_BRANCH }}.patch" \
@@ -353,18 +395,18 @@ jobs:
       # though the source patches are applied. All SUSFS configs must be
       # explicitly enabled here.
       #
-      # CONFIG_KSU_SUSFS               — master switch, must be on
-      # CONFIG_KSU_SUSFS_SUS_PATH      — hide paths from stat/readdir
-      # CONFIG_KSU_SUSFS_SUS_MOUNT     — hide mounts from /proc/mounts
-      # CONFIG_KSU_SUSFS_SUS_KSTAT     — spoof stat results
-      # CONFIG_KSU_SUSFS_SUS_OVERLAYFS — hide overlayfs mounts
-      # CONFIG_KSU_SUSFS_TRY_UMOUNT    — auto-unmount sus mounts on exit
-      # CONFIG_KSU_SUSFS_SPOOF_UNAME   — spoof uname kernel string
-      # CONFIG_KSU_SUSFS_ENABLE_LOG    — enable SUSFS kernel logging
-      # CONFIG_KSU_SUSFS_OPEN_REDIRECT — redirect open() calls
-      # CONFIG_KSU_SUSFS_SUS_SU        — sus_su binary support
-      #                                   (enable for kprobe builds;
-      #                                    disable if using inline hooks)
+      # CONFIG_KSU_SUSFS              — master switch, must be on
+      # CONFIG_KSU_SUSFS_SUS_PATH     — hide paths from stat/readdir
+      # CONFIG_KSU_SUSFS_SUS_MOUNT    — hide mounts from /proc/mounts
+      # CONFIG_KSU_SUSFS_SUS_KSTAT    — spoof stat results
+      # CONFIG_KSU_SUSFS_SUS_OVERLAYFS— hide overlayfs mounts
+      # CONFIG_KSU_SUSFS_TRY_UMOUNT   — auto-unmount sus mounts on exit
+      # CONFIG_KSU_SUSFS_SPOOF_UNAME  — spoof uname kernel string
+      # CONFIG_KSU_SUSFS_ENABLE_LOG   — enable SUSFS kernel logging
+      # CONFIG_KSU_SUSFS_OPEN_REDIRECT— redirect open() calls
+      # CONFIG_KSU_SUSFS_SUS_SU       — sus_su binary support
+      #                                 (enable for kprobe builds;
+      #                                  disable if using inline hooks)
       # CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT — AUTO_ADD support for magic
       #                                    mount managers (KSU/SukiSU)
       #
