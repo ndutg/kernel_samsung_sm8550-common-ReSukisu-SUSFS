@@ -1,54 +1,5 @@
 # ============================================================================
 # SM8550 Kernel Matrix Build — Selectable Variants + Clang Cache + KPM
-#
-# Variants:
-#   1. KernelSU-Next (stable v3.2.0+) -> no KPM (not supported upstream)
-#   2. SukiSU Ultra  (main  v4.1.2+)  -> KPM enabled
-#   3. ReSukiSU      (main  v4.1.0+)  -> KPM enabled
-#
-# KPM requires: CONFIG_KPM=y + CONFIG_KALLSYMS=y + CONFIG_KALLSYMS_ALL=y
-# Applied via scripts/config after defconfig, then olddefconfig to resolve deps.
-#
-# Clang r584948 is cached — first run downloads once, all subsequent runs
-# restore in ~30 s.
-#
-# Last verified: April 2026
-#   KernelSU-Next : v3.2.0  (2026-04-14) — stable branch  (HTTP 200)
-#   SukiSU Ultra  : v4.1.2  (2026-03-09) — main branch    (HTTP 200)
-#   ReSukiSU      : v4.1.0  (latest tag) — main branch    (HTTP 200)
-#   SUSFS4KSU     : gki-android13-5.15   — gitlab.com/simonpunk/susfs4ksu
-#   AOSP Clang    : r584948 (confirmed working in CI)
-#
-# FIX 1 — Clang cache miss on parallel runs:
-#   A dedicated `prepare-clang` job runs BEFORE the matrix and saves the
-#   cache. Each build job then uses actions/cache/restore (restore-only) so
-#   they never race to save the same key simultaneously.
-#
-# FIX 2 — supercall.h not found (KPM build fatal error):
-#   kpm.h does: #include <uapi/supercall.h>
-#   That header lives inside the KSU tree but is never copied to the kernel
-#   include path. A new step copies it to include/uapi/ before compilation.
-#
-# FIX 3 — SukiSU Ultra setup_arg 'susfs-main' branch does not exist:
-#   Changed to 'main' (the actual default branch). The old value caused a
-#   silent git pathspec error and fallback that left the KSU tree incomplete.
-#
-# FIX 4 — SUSFS not active after flash (all 3 variants affected):
-#   The SUSFS patches are applied correctly, but gki_defconfig does not
-#   include any CONFIG_KSU_SUSFS_* entries — they all default to 'n' and
-#   the SUSFS code is compiled out entirely. A dedicated step now enables
-#   all required SUSFS configs via scripts/config before olddefconfig.
-#   Ref: simonpunk/susfs4ksu docs: "Make sure to have CONFIG_KSU_SUSFS
-#   enabled before building — some features are disabled by default."
-#
-# FIX 5 — Node.js 24 compatibility (GitHub Actions cutover June 2, 2026):
-#   GitHub is forcing all Actions runners to Node.js 24 on June 2, 2026.
-#   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true' is set in the global env
-#   so we opt-in now — this eliminates the deprecation warning from the
-#   runner logs and ensures builds keep working past the cutover date.
-#   Ref: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners
-#
-# File location: .github/workflows/build-kernel-matrix.yml
 # ============================================================================
 
 name: Build SM8550 Kernel — KSU Matrix
@@ -69,7 +20,7 @@ on:
         type: boolean
         default: true
       enable_kpm:
-        description: "Enable KPM — Kernel Patch Manager (SukiSU Ultra + ReSukiSU only, ignored for KernelSU-Next)"
+        description: "Enable KPM — Kernel Patch Manager"
         type: boolean
         default: true
 
@@ -83,12 +34,10 @@ env:
   SUSFS_REPO: https://gitlab.com/simonpunk/susfs4ksu.git
   SUSFS_BRANCH: gki-android13-5.15
   CLANG_VERSION: r584948
-  # FIX 5: Opt-in to Node.js 24 now — GitHub forces this on June 2, 2026.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
 
-  # ── Job 1: Resolve build matrix from checkbox choices ─────────────────────
   setup:
     name: Resolve build matrix
     runs-on: ubuntu-24.04
@@ -154,11 +103,6 @@ jobs:
             echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           fi
 
-  # ── Job 2: Download + cache Clang ONCE before the matrix starts ───────────
-  #
-  # FIX 1: With parallel matrix jobs all starting at the same time, every
-  # runner gets a cache miss because none has finished saving yet. This job
-  # runs first, populates the cache, then the build jobs just restore it.
   prepare-clang:
     name: Cache Clang toolchain
     runs-on: ubuntu-24.04
@@ -189,7 +133,6 @@ jobs:
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
           clang --version || { echo "ERROR: clang binary not found."; exit 1; }
 
-  # ── Job 3: Build — one parallel runner per selected variant ───────────────
   build:
     name: ${{ matrix.display_name }}
     needs: [setup, prepare-clang]
@@ -202,7 +145,6 @@ jobs:
 
     steps:
 
-      # ── 1. Checkout kernel source ────────────────────────────────────────
       - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
@@ -211,7 +153,6 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── 2. Install build dependencies ───────────────────────────────────
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -223,10 +164,6 @@ jobs:
             lzop zlib1g-dev pahole dwarves cpio zip \
             python3 python-is-python3 tar perl lz4 jq
 
-      # ── 3. Restore Clang from cache (restore-only — prepare-clang saves) ─
-      #
-      # FIX 1 (continued): restore-only so parallel build jobs never race
-      # to save the same cache key simultaneously.
       - name: Restore Clang ${{ env.CLANG_VERSION }} from cache
         uses: actions/cache/restore@v4
         with:
@@ -239,7 +176,6 @@ jobs:
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
           clang --version || { echo "ERROR: clang not found."; exit 1; }
 
-      # ── 4. Setup KSU variant ─────────────────────────────────────────────
       - name: Setup ${{ matrix.display_name }}
         id: ksu
         run: |
@@ -263,76 +199,60 @@ jobs:
 
           BUILD_SUFFIX="${{ matrix.artifact_prefix }}-${KSU_TAG}-kprobes${KPM_SUFFIX}"
 
-          echo "KSU tag : ${KSU_TAG}"
-          echo "KPM enabled : ${{ matrix.enable_kpm }}"
-          echo "Build suffix: ${BUILD_SUFFIX}"
-
           echo "KSUDIR=${KSU_DIR}"            >> $GITHUB_ENV
           echo "BUILDSUFFIX=${BUILD_SUFFIX}"  >> $GITHUB_ENV
           echo "SUSFSSKIPKSUDRIVERPATCH=${{ matrix.skip_drv_patch }}" >> $GITHUB_ENV
 
-      # ── 5. KPM header + ksu_cred forward-declaration fix ─────────────────
-      #
-      # FIX 2 (updated): Two distinct problems required for KPM to compile:
-      #
-      # a) supercall.h / uapi headers:
-      #    kpm.h does: #include <uapi/supercall.h>
-      #    The uapi headers live inside the KernelSU tree but are never
-      #    copied to include/uapi. Copy them now.
-      #
-      # b) Include-path for drivers/kernelsu/:
-      #    feature/kernel_umount.c is compiled from the parent
-      #    drivers/kernelsu/Makefile context and needs -I pointing to the
-      #    drivers/kernelsu/ tree so its local headers resolve correctly.
-      #
-      # c) ksu_cred undeclared in multiple source files:
-      #    SukiSU-Ultra v4.1.x removed 'extern struct cred *ksu_cred;' from
-      #    ksu.h in a header refactor. Several .c files rely on this.
-      #    Fix: dynamically scan and inject the extern declaration into all 
-      #    affected files — this is idiomatic C and completely robust against 
-      #    future upstream changes.
-      - name: KPM uapi headers + ksu_cred fix
+      # ── 5. Upstream Refactor Fixes (ksu_cred & allow_shell) ──────────────
+      - name: KPM uapi headers & upstream refactor fixes
         if: matrix.enable_kpm == 'true'
         run: |
-          # ── a) Copy uapi headers ──────────────────────────────────────────
           echo "==> Copying KernelSU uapi headers to include/uapi/ ..."
           mkdir -p include/uapi
           if [ -d "${{ matrix.ksu_dir }}/uapi" ]; then
             cp "${{ matrix.ksu_dir }}"/uapi/*.h include/uapi/ 2>/dev/null || true
-            echo "Copied: $(ls include/uapi/*.h 2>/dev/null || echo 'none')"
-          else
-            echo "WARNING: ${{ matrix.ksu_dir }}/uapi not found — skipping uapi copy"
           fi
 
-          # ── b) Patch drivers/kernelsu/Makefile with include path ──────────
           MAIN_MK="drivers/kernelsu/Makefile"
           if [ -f "${MAIN_MK}" ]; then
-            # Only add once — guard against double-patching on re-runs
             if ! grep -q 'srctree.*drivers/kernelsu' "${MAIN_MK}"; then
               printf '\n# FIX: expose drivers/kernelsu/ to all TUs compiled here\n' >> "${MAIN_MK}"
               printf 'ccflags-y += -I$(srctree)/drivers/kernelsu\n' >> "${MAIN_MK}"
-              echo "Patched ${MAIN_MK} with include path"
-            else
-              echo "${MAIN_MK} already has include path — skipping"
             fi
           fi
 
-          # ── c) Forward-declare ksu_cred in affected source files ─────────
+          # Fix 1: ksu_cred
           echo "==> Scanning for files missing ksu_cred declaration..."
-          FILES_TO_PATCH=$(grep -rl 'ksu_cred' drivers/kernelsu/ | grep '\.c$' || true)
-          for file in $FILES_TO_PATCH; do
+          FILES_TO_PATCH_CRED=$(grep -rl 'ksu_cred' drivers/kernelsu/ | grep '\.c$' || true)
+          for file in $FILES_TO_PATCH_CRED; do
             if ! grep -q 'extern struct cred \*ksu_cred' "$file"; then
               echo "==> Injecting ksu_cred forward declaration into $file"
               {
                 printf '#include <linux/cred.h>   /* ksu_cred fix */\n'
-                printf 'extern struct cred *ksu_cred; /* ksu_cred fix: missing from ksu.h */\n'
+                printf 'extern struct cred *ksu_cred; /* missing from ksu.h */\n'
                 cat "$file"
               } > "${file}.tmp"
               mv "${file}.tmp" "$file"
             fi
           done
 
-      # ── 6. Apply SUSFS patches ───────────────────────────────────────────
+          # Fix 2: allow_shell (undeclared identifier patch)
+          echo "==> Scanning for files missing allow_shell declaration..."
+          FILES_TO_PATCH_SHELL=$(grep -rl 'allow_shell' drivers/kernelsu/ | grep '\.c$' || true)
+          for file in $FILES_TO_PATCH_SHELL; do
+            # Only patch if we don't already see an extern declaration
+            if ! grep -E -q 'extern.*allow_shell' "$file"; then
+              echo "==> Injecting allow_shell forward declaration into $file"
+              {
+                printf '#include <linux/types.h>  /* allow_shell fix */\n'
+                printf 'extern bool ksu_allow_shell; /* upstream header fix */\n'
+                printf 'extern bool allow_shell;     /* upstream header fix */\n'
+                cat "$file"
+              } > "${file}.tmp"
+              mv "${file}.tmp" "$file"
+            fi
+          done
+
       - name: Apply SUSFS patches
         run: |
           git clone --depth 1 \
@@ -356,11 +276,8 @@ jobs:
               < "susfs4ksu/kernel_patches/10_enable_susfs_for_ksu.patch" \
               || { echo "ERROR: KSU driver patch failed."; exit 1; }
           fi
-
           rm -rf susfs4ksu
-          echo "==> SUSFS patching complete."
 
-      # ── 7. Kernel version + date ─────────────────────────────────────────
       - name: Resolve kernel version and date
         id: meta
         run: |
@@ -368,13 +285,11 @@ jobs:
           echo "kernelversion=${KVER}" >> $GITHUB_OUTPUT
           echo "date=$(date +%Y%m%d)"  >> $GITHUB_OUTPUT
 
-      # ── 8. Swap (24 GB) ──────────────────────────────────────────────────
       - name: Set up swap (24 GB)
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 24
 
-      # ── 9. Generate defconfig ────────────────────────────────────────────
       - name: Generate defconfig
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
@@ -382,37 +297,10 @@ jobs:
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             gki_defconfig
 
-      # ── 10. Enable SUSFS + KPM kernel configs ────────────────────────────
-      #
-      # FIX 4: gki_defconfig has no CONFIG_KSU_SUSFS_* entries at all —
-      # they all default to 'n' and the SUSFS code is compiled out even
-      # though the source patches are applied. All SUSFS configs must be
-      # explicitly enabled here.
-      #
-      # CONFIG_KSU_SUSFS               — master switch, must be on
-      # CONFIG_KSU_SUSFS_SUS_PATH      — hide paths from stat/readdir
-      # CONFIG_KSU_SUSFS_SUS_MOUNT     — hide mounts from /proc/mounts
-      # CONFIG_KSU_SUSFS_SUS_KSTAT     — spoof stat results
-      # CONFIG_KSU_SUSFS_SUS_OVERLAYFS — hide overlayfs mounts
-      # CONFIG_KSU_SUSFS_TRY_UMOUNT    — auto-unmount sus mounts on exit
-      # CONFIG_KSU_SUSFS_SPOOF_UNAME   — spoof uname kernel string
-      # CONFIG_KSU_SUSFS_ENABLE_LOG    — enable SUSFS kernel logging
-      # CONFIG_KSU_SUSFS_OPEN_REDIRECT — redirect open() calls
-      # CONFIG_KSU_SUSFS_SUS_SU        — sus_su binary support
-      #                                   (enable for kprobe builds;
-      #                                    disable if using inline hooks)
-      # CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT — AUTO_ADD support for magic
-      #                                    mount managers (KSU/SukiSU)
-      #
-      # KPM configs (SukiSU Ultra + ReSukiSU only):
-      # CONFIG_KPM          — Kernel Patch Module runtime loader
-      # CONFIG_KALLSYMS     — exports kernel symbol table for KPM
-      # CONFIG_KALLSYMS_ALL — includes static/local symbols for KPM
       - name: Enable SUSFS + KPM kernel configs
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
 
-          echo "==> Enabling SUSFS configs (all variants)..."
           ./scripts/config --file out/.config \
             -e CONFIG_KSU_SUSFS \
             -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
@@ -427,25 +315,16 @@ jobs:
             -e CONFIG_KSU_SUSFS_SUS_SU
 
           if [ "${{ matrix.enable_kpm }}" = "true" ]; then
-            echo "==> Enabling KPM configs (${{ matrix.display_name }})..."
             ./scripts/config --file out/.config \
               -e CONFIG_KPM \
               -e CONFIG_KALLSYMS \
               -e CONFIG_KALLSYMS_ALL
           fi
 
-          echo "==> Running olddefconfig to resolve all dependencies..."
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             olddefconfig
 
-          echo "==> Config verification:"
-          echo "--- SUSFS ---"
-          grep "CONFIG_KSU_SUSFS" out/.config | sort
-          echo "--- KPM ---"
-          grep -E "CONFIG_KPM|CONFIG_KALLSYMS" out/.config | sort
-
-      # ── 11. Compile kernel ───────────────────────────────────────────────
       - name: Build kernel (${{ matrix.display_name }})
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
@@ -453,24 +332,20 @@ jobs:
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1
 
-      # ── 12. Package with AnyKernel3 ─────────────────────────────────────
       - name: Package AnyKernel3 ZIP
         run: |
           cp .github/goodies/AnyKernel3.zip .
           unzip AnyKernel3.zip -d AnyKernel3
 
-          # Handle both Image and Image.gz depending on build config
           if [ -f out/arch/arm64/boot/Image.gz ]; then
             cp out/arch/arm64/boot/Image.gz AnyKernel3/
           elif [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
           else
             echo "ERROR: No kernel Image found in out/arch/arm64/boot/"
-            ls out/arch/arm64/boot/ || true
             exit 1
           fi
 
-      # ── 13. Upload artifact ──────────────────────────────────────────────
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
