@@ -1,10 +1,10 @@
 # ============================================================================
 # SM8550 Kernel Matrix Build — Selectable Variants + Clang Cache + KPM
 #
-# FINAL FIX (April 2026):
-#   SukiSU Ultra v4.1.2 still has ksu_cred undeclared because the existing
-#   #include "ksu.h" is not at the top of kernel_umount.c.
-#   → We now FORCE the include at the very first line (bullet-proof).
+# FINAL FIX (April 2026 v2):
+#   - Always force -I path on kpm/ and feature/ Makefiles (no more conditional skip)
+#   - Also patch top-level drivers/kernelsu/Makefile for safety
+#   - Force #include "ksu.h" at the very top of kernel_umount.c
 # ============================================================================
 
 name: Build SM8550 Kernel — KSU Matrix
@@ -149,25 +149,24 @@ jobs:
           echo "BUILDSUFFIX=${BUILD_SUFFIX}" >> $GITHUB_ENV
           echo "SUSFSSKIPKSUDRIVERPATCH=${{ matrix.skip_drv_patch }}" >> $GITHUB_ENV
 
-      # ── CRITICAL FIX: KPM headers + include paths (FIX 6 + FIX 7) ──
+      # ── CRITICAL FIX: KPM headers + include paths (always apply) ──
       - name: Install KPM uapi headers + patch include paths
         if: matrix.enable_kpm == 'true'
         run: |
           mkdir -p include/uapi
           cp KernelSU/uapi/*.h include/uapi/ 2>/dev/null || true
 
-          # FIX 6 + 7: add include path to the actual build location
-          for DIR in kpm feature; do
-            MK="drivers/kernelsu/${DIR}/Makefile"
-            if [ -f "${MK}" ] && ! grep -q 'drivers/kernelsu' "${MK}"; then
+          # Always force the include path on kpm/, feature/, and top-level
+          for MK in "drivers/kernelsu/kpm/Makefile" "drivers/kernelsu/feature/Makefile" "drivers/kernelsu/Makefile"; do
+            if [ -f "${MK}" ]; then
               echo "" >> "${MK}"
-              echo '# FIX 6/7: expose drivers/kernelsu/' >> "${MK}"
+              echo '# FIX 6/7: expose drivers/kernelsu/ (forced every build)' >> "${MK}"
               echo 'ccflags-y += -I$(srctree)/drivers/kernelsu' >> "${MK}"
-              echo "Patched ${MK}"
+              echo "Patched ${MK} with include path"
             fi
           done
 
-          # ── FINAL FIX 7b: FORCE #include "ksu.h" AT THE VERY TOP ──
+          # ── FORCE #include "ksu.h" at the very top of kernel_umount.c ──
           UMOUNT_C="drivers/kernelsu/feature/kernel_umount.c"
           if [ -f "${UMOUNT_C}" ]; then
             echo "Forcing #include \"ksu.h\" at the top of ${UMOUNT_C}"
@@ -182,7 +181,7 @@ jobs:
             exit 1
           fi
 
-      # ── SUSFS patches (unchanged) ──
+      # ── SUSFS patches ──
       - name: Apply SUSFS patches
         run: |
           git clone --depth 1 "${{ env.SUSFS_REPO }}" -b "${{ env.SUSFS_BRANCH }}" susfs4ksu
@@ -207,14 +206,10 @@ jobs:
         with:
           swap-size-gb: 24
 
-      - name: Generate defconfig
+      - name: Generate defconfig + enable configs
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
           make -j$(nproc) O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 gki_defconfig
-
-      - name: Enable SUSFS + KPM configs
-        run: |
-          export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
           ./scripts/config --file out/.config -e CONFIG_KSU_SUSFS -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT -e CONFIG_KSU_SUSFS_SUS_PATH -e CONFIG_KSU_SUSFS_SUS_MOUNT -e CONFIG_KSU_SUSFS_SUS_KSTAT -e CONFIG_KSU_SUSFS_SUS_OVERLAYFS -e CONFIG_KSU_SUSFS_TRY_UMOUNT -e CONFIG_KSU_SUSFS_SPOOF_UNAME -e CONFIG_KSU_SUSFS_ENABLE_LOG -e CONFIG_KSU_SUSFS_OPEN_REDIRECT -e CONFIG_KSU_SUSFS_SUS_SU
           if [ "${{ matrix.enable_kpm }}" = "true" ]; then
             ./scripts/config --file out/.config -e CONFIG_KPM -e CONFIG_KALLSYMS -e CONFIG_KALLSYMS_ALL -e CONFIG_MODULES
