@@ -203,25 +203,16 @@ jobs:
           echo "BUILDSUFFIX=${BUILD_SUFFIX}"  >> $GITHUB_ENV
           echo "SUSFSSKIPKSUDRIVERPATCH=${{ matrix.skip_drv_patch }}" >> $GITHUB_ENV
 
-      # ── 5. Upstream Refactor Fixes (ksu_cred & allow_shell) ──────────────
-      - name: KPM uapi headers & upstream refactor fixes
-        if: matrix.enable_kpm == 'true'
+# ── 5. KPM uapi headers + Dynamic Header Fixes ────────────────────────
+      - name: KPM uapi headers + Dynamic Header Fixes
         run: |
-          echo "==> Copying KernelSU uapi headers to include/uapi/ ..."
-          mkdir -p include/uapi
-          if [ -d "${{ matrix.ksu_dir }}/uapi" ]; then
-            cp "${{ matrix.ksu_dir }}"/uapi/*.h include/uapi/ 2>/dev/null || true
-          fi
+          # Part A: Copy KPM uapi headers
+          cp drivers/kernelsu/kpm/uapi/kpm.h include/uapi/linux/
 
-          MAIN_MK="drivers/kernelsu/Makefile"
-          if [ -f "${MAIN_MK}" ]; then
-            if ! grep -q 'srctree.*drivers/kernelsu' "${MAIN_MK}"; then
-              printf '\n# FIX: expose drivers/kernelsu/ to all TUs compiled here\n' >> "${MAIN_MK}"
-              printf 'ccflags-y += -I$(srctree)/drivers/kernelsu\n' >> "${MAIN_MK}"
-            fi
-          fi
+          # Part B: Patch Makefile for KPM
+          sed -i 's/^ccflags-y += -I$(srctree)\/drivers\/kernelsu/ccflags-y += -I$(srctree)\/drivers\/kernelsu -I$(srctree)\/drivers\/kernelsu\/kpm/' drivers/kernelsu/Makefile
 
-          # Fix 1: ksu_cred
+          # Fix 1: ksu_cred (Dynamic Scanning)
           echo "==> Scanning for files missing ksu_cred declaration..."
           FILES_TO_PATCH_CRED=$(grep -rl 'ksu_cred' drivers/kernelsu/ | grep '\.c$' || true)
           for file in $FILES_TO_PATCH_CRED; do
@@ -240,13 +231,28 @@ jobs:
           echo "==> Scanning for files missing allow_shell declaration..."
           FILES_TO_PATCH_SHELL=$(grep -rl 'allow_shell' drivers/kernelsu/ | grep '\.c$' || true)
           for file in $FILES_TO_PATCH_SHELL; do
-            # Only patch if we don't already see an extern declaration
             if ! grep -E -q 'extern.*allow_shell' "$file"; then
               echo "==> Injecting allow_shell forward declaration into $file"
               {
                 printf '#include <linux/types.h>  /* allow_shell fix */\n'
                 printf 'extern bool ksu_allow_shell; /* upstream header fix */\n'
                 printf 'extern bool allow_shell;     /* upstream header fix */\n'
+                cat "$file"
+              } > "${file}.tmp"
+              mv "${file}.tmp" "$file"
+            fi
+          done
+
+          # Fix 3: ksu_late_loaded (Dynamic Scanning for core hooks)
+          echo "==> Scanning for files missing ksu_late_loaded declaration..."
+          # Scan KSU drivers plus core directories where KSU hooks are injected
+          FILES_TO_PATCH_LATE=$(grep -rl 'ksu_late_loaded' drivers/kernelsu/ fs/ kernel/ | grep '\.c$' || true)
+          for file in $FILES_TO_PATCH_LATE; do
+            if ! grep -q 'extern bool ksu_late_loaded' "$file"; then
+              echo "==> Injecting ksu_late_loaded forward declaration into $file"
+              {
+                printf '#include <linux/types.h>  /* ksu_late_loaded fix */\n'
+                printf 'extern bool ksu_late_loaded; /* upstream header fix */\n'
                 cat "$file"
               } > "${file}.tmp"
               mv "${file}.tmp" "$file"
