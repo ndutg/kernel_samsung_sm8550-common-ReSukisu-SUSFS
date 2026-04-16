@@ -48,7 +48,35 @@ jobs:
       - name: Generate matrix JSON
         id: set-matrix
         run: |
-          # ... (Leave your matrix generation logic unchanged here)
+          MATRIX_JSON="{\"include\":["
+          HAS_JOBS="false"
+
+          if [ "${{ github.event.inputs.build_ksun }}" = "true" ]; then
+            MATRIX_JSON="${MATRIX_JSON}{\"display_name\":\"KernelSU-Next\",\"artifact_prefix\":\"KSUN\",\"ksu_dir\":\"KernelSU-Next\",\"setup_url\":\"https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh\",\"setup_arg\":\"next\",\"skip_drv_patch\":\"false\",\"enable_kpm\":\"false\"},"
+            HAS_JOBS="true"
+          fi
+
+          if [ "${{ github.event.inputs.build_sukisu }}" = "true" ]; then
+            MATRIX_JSON="${MATRIX_JSON}{\"display_name\":\"SukiSU Ultra\",\"artifact_prefix\":\"SukiSU\",\"ksu_dir\":\"KernelSU\",\"setup_url\":\"https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh\",\"setup_arg\":\"main\",\"skip_drv_patch\":\"true\",\"enable_kpm\":\"${{ github.event.inputs.enable_kpm }}\"},"
+            HAS_JOBS="true"
+          fi
+
+          if [ "${{ github.event.inputs.build_resukisu }}" = "true" ]; then
+            MATRIX_JSON="${MATRIX_JSON}{\"display_name\":\"ReSukiSU\",\"artifact_prefix\":\"ReSukiSU\",\"ksu_dir\":\"KernelSU\",\"setup_url\":\"https://raw.githubusercontent.com/backslashxx/KernelSU/main/kernel/setup.sh\",\"setup_arg\":\"main\",\"skip_drv_patch\":\"true\",\"enable_kpm\":\"${{ github.event.inputs.enable_kpm }}\"},"
+            HAS_JOBS="true"
+          fi
+
+          if [ "$HAS_JOBS" = "true" ]; then
+            # Remove trailing comma and close JSON array
+            MATRIX_JSON="${MATRIX_JSON%,}]}"
+            echo "is_empty=false" >> $GITHUB_OUTPUT
+          else
+            MATRIX_JSON="{}"
+            echo "is_empty=true" >> $GITHUB_OUTPUT
+          fi
+
+          echo "matrix=${MATRIX_JSON}" >> $GITHUB_OUTPUT
+          echo "Generated Matrix: ${MATRIX_JSON}"
 
   # ── Job 2: Cache Clang ONCE ───────────────────────────────────────────────
   prepare-clang:
@@ -92,7 +120,6 @@ jobs:
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
-
       # ── 1. Checkout kernel source ────────────────────────────────────────
       - name: Checkout kernel source
         uses: actions/checkout@v4
@@ -207,7 +234,6 @@ jobs:
           fi
 
           # ── FIX 7b: ensure ksu_cred is declared in all files referencing it ─────────────
-          # Bypasses the symlink issue by targeting the cloned directory directly.
           echo "Applying ksu_cred extern fix to all .c files in ${KSU_DIR}/"
           find "${KSU_DIR}" -name "*.c" | while read -r file; do
             if grep -q 'ksu_cred' "${file}" && ! grep -q 'extern.*ksu_cred' "${file}"; then
@@ -297,8 +323,6 @@ jobs:
                 -e CONFIG_HAVE_KPROBES \
                 -e CONFIG_KPROBE_EVENTS \
                 -e CONFIG_FTRACE
-              # FIX 8: CONFIG_MODULES=y is required for module_alloc().
-              # NEW FIX: KPROBES stack must be active for KPM to dynamically patch the kernel.
             fi
           }
 
