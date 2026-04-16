@@ -45,17 +45,22 @@ jobs:
         id: build-matrix
         run: |
           VARIANTS='[]'
-          if [ "${{ inputs.build_ksun }}" = "true" ]; then
+          if [ "${{ github.event.inputs.build_ksun }}" = "true" ]; then
             VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{"variant":"ksun-stable","display_name":"KernelSU-Next (stable)","setup_url":"https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh","setup_arg":"stable","ksu_dir":"KernelSU-Next","artifact_prefix":"ksun-stable","skip_drv_patch":"true","enable_kpm":"false"}]')
           fi
-          if [ "${{ inputs.build_sukisu }}" = "true" ]; then
-            VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{"variant":"sukisu-ultra","display_name":"SukiSU Ultra (main)","setup_url":"https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh","setup_arg":"main","ksu_dir":"KernelSU","artifact_prefix":"sukisu-susfs","skip_drv_patch":"true","enable_kpm":"${{ inputs.enable_kpm }}"}]')
+          if [ "${{ github.event.inputs.build_sukisu }}" = "true" ]; then
+            VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{"variant":"sukisu-ultra","display_name":"SukiSU Ultra (main)","setup_url":"https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh","setup_arg":"main","ksu_dir":"KernelSU","artifact_prefix":"sukisu-susfs","skip_drv_patch":"true","enable_kpm":"${{ github.event.inputs.enable_kpm }}"}]')
           fi
-          if [ "${{ inputs.build_resukisu }}" = "true" ]; then
-            VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{"variant":"resukisu","display_name":"ReSukiSU (main)","setup_url":"https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh","setup_arg":"main","ksu_dir":"KernelSU","artifact_prefix":"resukisu","skip_drv_patch":"true","enable_kpm":"${{ inputs.enable_kpm }}"}]')
+          if [ "${{ github.event.inputs.build_resukisu }}" = "true" ]; then
+            VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{"variant":"resukisu","display_name":"ReSukiSU (main)","setup_url":"https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh","setup_arg":"main","ksu_dir":"KernelSU","artifact_prefix":"resukisu","skip_drv_patch":"true","enable_kpm":"${{ github.event.inputs.enable_kpm }}"}]')
           fi
-          COUNT=$(echo "$VARIANTS" | jq 'length')
-          echo "is_empty=false" >> $GITHUB_OUTPUT
+          
+          if [ "$VARIANTS" = "[]" ]; then
+            echo "is_empty=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_empty=false" >> $GITHUB_OUTPUT
+          fi
+          
           MATRIX=$(printf '{"include":%s}' "$VARIANTS" | jq -c .)
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
@@ -67,12 +72,15 @@ jobs:
         with:
           path: clang-toolchain
           key: clang-aosp-${{ env.CLANG_VERSION }}
-          fail-on-cache-miss: true
+          fail-on-cache-miss: false
 
-      - name: Verify Clang
+      - name: Download Clang (if miss)
         run: |
-          export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
-          clang --version
+          if [ ! -d "clang-toolchain" ]; then
+            mkdir -p clang-toolchain
+            curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.CLANG_VERSION }}.tar.gz
+            tar -C clang-toolchain -xzf clang-${{ env.CLANG_VERSION }}.tar.gz
+          fi
 
   build:
     name: ${{ matrix.display_name }}
@@ -98,52 +106,32 @@ jobs:
         with:
           path: clang-toolchain
           key: clang-aosp-${{ env.CLANG_VERSION }}
-          fail-on-cache-miss: true
 
       - name: Setup ${{ matrix.display_name }}
         id: ksu
         run: |
           curl -sSfL --retry 3 --connect-timeout 20 "${{ matrix.setup_url }}" | bash -s "${{ matrix.setup_arg }}"
           KSU_DIR="${{ matrix.ksu_dir }}"
-          KSU_TAG=$(git -C "${KSU_DIR}" describe --tags --abbrev=0 2>/dev/null || git -C "${KSU_DIR}" tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null | head -1 || echo "main")
+          KSU_TAG=$(git -C "${KSU_DIR}" describe --tags --abbrev=0 2>/dev/null || echo "main")
           KPM_SUFFIX=$([ "${{ matrix.enable_kpm }}" = "true" ] && echo "-kpm" || echo "")
           BUILD_SUFFIX="${{ matrix.artifact_prefix }}-${KSU_TAG}-kprobes${KPM_SUFFIX}"
-          echo "KSU tag      : ${KSU_TAG}"
-          echo "KPM enabled  : ${{ matrix.enable_kpm }}"
-          echo "Build suffix : ${BUILD_SUFFIX}"
           echo "KSUDIR=${KSU_DIR}" >> $GITHUB_ENV
           echo "BUILDSUFFIX=${BUILD_SUFFIX}" >> $GITHUB_ENV
           echo "SUSFSSKIPKSUDRIVERPATCH=${{ matrix.skip_drv_patch }}" >> $GITHUB_ENV
 
-      - name: Install KPM uapi headers + patch include paths + fix ksu_cred in ALL files
+      - name: KPM uapi + Fixes
         if: matrix.enable_kpm == 'true'
         run: |
           mkdir -p include/uapi
-          cp KernelSU/uapi/*.h include/uapi/ 2>/dev/null || true
-
-          # Force include path on ALL relevant Makefiles
+          cp ${{ matrix.ksu_dir }}/uapi/*.h include/uapi/ 2>/dev/null || true
           for MK in "drivers/kernelsu/kpm/Makefile" "drivers/kernelsu/feature/Makefile" "drivers/kernelsu/Makefile"; do
             if [ -f "${MK}" ]; then
-              echo "" >> "${MK}"
-              echo '# FIX 6/7: expose drivers/kernelsu/ (forced every build)' >> "${MK}"
               echo 'ccflags-y += -I$(srctree)/drivers/kernelsu' >> "${MK}"
-              echo "✅ Patched ${MK} with include path"
             fi
           done
-
-          # ── FINAL FIX: Add extern ksu_cred to EVERY .c file in drivers/kernelsu/ ──
-          echo "Applying ksu_cred extern fix to all .c files in drivers/kernelsu/"
           find drivers/kernelsu -name "*.c" | while read -r file; do
-            if ! grep -q 'extern struct cred \*ksu_cred' "${file}"; then
-              echo "Patching ${file}"
-              echo '#include "ksu.h"  /* FORCED FIX 7b by build script */' > "${file}.tmp"
-              echo 'extern struct cred *ksu_cred;  /* FORCED FIX for SukiSU Ultra — declaration missing in ksu.h */' >> "${file}.tmp"
-              cat "${file}" >> "${file}.tmp"
-              mv "${file}.tmp" "${file}"
-            fi
+            sed -i '1i #include "ksu.h"\nextern struct cred *ksu_cred;' "$file"
           done
-
-          echo "✅ All ksu_cred references fixed"
 
       - name: Apply SUSFS patches
         run: |
@@ -151,10 +139,10 @@ jobs:
           cp susfs4ksu/kernel_patches/fs/susfs.c fs/
           cp susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
-          patch -p1 --forward < "susfs4ksu/kernel_patches/50_add_susfs_in_${{ env.SUSFS_BRANCH }}.patch" || echo "SUSFS patch applied (some hunks may have been skipped)"
+          patch -p1 --forward < "susfs4ksu/kernel_patches/50_add_susfs_in_${{ env.SUSFS_BRANCH }}.patch" || true
           rm -rf susfs4ksu
 
-      - name: Generate defconfig + enable configs
+      - name: Build kernel
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
           make -j$(nproc) O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 gki_defconfig
@@ -163,21 +151,17 @@ jobs:
             ./scripts/config --file out/.config -e CONFIG_KPM -e CONFIG_KALLSYMS -e CONFIG_KALLSYMS_ALL -e CONFIG_MODULES
           fi
           make -j$(nproc) O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
-
-      - name: Build kernel
-        run: |
-          export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
           make -j$(nproc) O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1
 
       - name: Package AnyKernel3
         run: |
-          cp .github/goodies/AnyKernel3.zip .
+          cp .github/goodies/AnyKernel3.zip . || (echo "AnyKernel3.zip missing!" && exit 1)
           unzip -q AnyKernel3.zip -d AnyKernel3
           cp out/arch/arm64/boot/Image.gz AnyKernel3/ 2>/dev/null || cp out/arch/arm64/boot/Image AnyKernel3/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sm8550-sukisu-susfs-v4.1.2-kprobes-kpm-${{ github.run_number }}
+          name: ${{ env.BUILDSUFFIX }}
           path: AnyKernel3
           compression-level: 9
