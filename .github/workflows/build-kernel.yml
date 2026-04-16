@@ -115,7 +115,7 @@ jobs:
           echo "BUILDSUFFIX=${BUILD_SUFFIX}" >> $GITHUB_ENV
           echo "SUSFSSKIPKSUDRIVERPATCH=${{ matrix.skip_drv_patch }}" >> $GITHUB_ENV
 
-      - name: Install KPM uapi headers + patch include paths + fix ksu_cred
+      - name: Install KPM uapi headers + patch include paths + fix ksu_cred in ALL files
         if: matrix.enable_kpm == 'true'
         run: |
           mkdir -p include/uapi
@@ -131,21 +131,19 @@ jobs:
             fi
           done
 
-          # ── FINAL FIX for SukiSU Ultra: force include + explicit extern declaration ──
-          UMOUNT_C="drivers/kernelsu/feature/kernel_umount.c"
-          if [ -f "${UMOUNT_C}" ]; then
-            echo "Forcing #include \"ksu.h\" + extern ksu_cred at top of ${UMOUNT_C}"
-            echo '#include "ksu.h"  /* FORCED FIX 7b by build script */' > "${UMOUNT_C}.tmp"
-            echo 'extern struct cred *ksu_cred;  /* FORCED FIX for SukiSU Ultra — declaration missing in ksu.h */' >> "${UMOUNT_C}.tmp"
-            cat "${UMOUNT_C}" >> "${UMOUNT_C}.tmp"
-            mv "${UMOUNT_C}.tmp" "${UMOUNT_C}"
-            echo "✅ Applied full fix"
-            echo "=== First 20 lines after patch ==="
-            head -20 "${UMOUNT_C}"
-          else
-            echo "ERROR: ${UMOUNT_C} not found"
-            exit 1
-          fi
+          # ── FINAL FIX: Add extern ksu_cred to EVERY .c file in drivers/kernelsu/ ──
+          echo "Applying ksu_cred extern fix to all .c files in drivers/kernelsu/"
+          find drivers/kernelsu -name "*.c" | while read -r file; do
+            if ! grep -q 'extern struct cred \*ksu_cred' "${file}"; then
+              echo "Patching ${file}"
+              echo '#include "ksu.h"  /* FORCED FIX 7b by build script */' > "${file}.tmp"
+              echo 'extern struct cred *ksu_cred;  /* FORCED FIX for SukiSU Ultra — declaration missing in ksu.h */' >> "${file}.tmp"
+              cat "${file}" >> "${file}.tmp"
+              mv "${file}.tmp" "${file}"
+            fi
+          done
+
+          echo "✅ All ksu_cred references fixed"
 
       - name: Apply SUSFS patches
         run: |
@@ -180,6 +178,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sm8550-${{ steps.meta.outputs.kernelversion }}-${{ env.BUILDSUFFIX }}-susfs-${{ steps.meta.outputs.date }}
+          name: sm8550-sukisu-susfs-v4.1.2-kprobes-kpm-${{ github.run_number }}
           path: AnyKernel3
           compression-level: 9
