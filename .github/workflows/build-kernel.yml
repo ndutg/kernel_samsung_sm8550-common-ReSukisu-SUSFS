@@ -7,36 +7,21 @@
 #   compact.c uses #include "policy/allowlist.h" — relative to the kpm/
 #   subdir, so the compiler looks for kpm/policy/allowlist.h which does
 #   not exist. The real file is drivers/kernelsu/policy/allowlist.h.
-#   Solution: after setup.sh runs, patch the kpm/Makefile to add:
-#     ccflags-y += -I$(srctree)/drivers/kernelsu
-#   This is the canonical Kbuild way to add a source-relative include
-#   path without touching the kernel's global CFLAGS.
+#   Solution: after setup.sh runs, patch the REAL build location
+#   drivers/kernelsu/kpm/Makefile (not the source repo).
 #
 # FIX 7 — SukiSU Ultra feature/kernel_umount.c: 'ksu_cred' undeclared
 #   kernel_umount.c references ksu_cred but lost its #include "ksu.h"
-#   during the v4.1.x refactor. Solution: add the missing include to
-#   kernel_umount.c if it is absent (idempotent sed guard).
-#   Additionally the feature/ Makefile also needs the same -I path flag
-#   so other feature headers resolve correctly.
+#   during the v4.1.x refactor. Solution: add the missing include + the
+#   same -I path to drivers/kernelsu/feature/Makefile.
 #
 # FIX 8 — ReSukiSU Ultra: KPM builds but shows "KPM unsupported" at runtime
 #   CONFIG_KPM=y is set and kpm.o compiles, but the KSU manager reports
-#   KPM unsupported. The runtime KPM init in ReSukiSU/SukiSU-Ultra
-#   requires module_alloc() to be reachable via kallsyms. On the SM8550
-#   GKI vendor kernel, module_alloc is only exposed when CONFIG_MODULES=y.
-#   Adding CONFIG_MODULES=y to the config step enables the symbol.
-#   Note: CONFIG_MODULES alone does not make the kernel load .ko files
-#   unless CONFIG_MODULE_UNLOAD + MODULE_SIG are also on — here we only
-#   need the symbol to be present in the kallsyms table for KPM's internal
-#   resolver. CONFIG_MODULES=y is sufficient and safe.
+#   KPM unsupported. The runtime KPM init requires module_alloc() to be
+#   reachable via kallsyms. CONFIG_MODULES=y makes the symbol appear.
 #
 # FIX 9 — SUSFS config verification shows empty for SukiSU Ultra
-#   scripts/config is called before olddefconfig, so symbols get resolved
-#   but the re-run of olddefconfig can reset them if there are dependency
-#   ordering issues. Re-running scripts/config AFTER olddefconfig and doing
-#   a second olddefconfig pass guarantees all options stick. This two-pass
-#   approach is the standard pattern used by Android kernel CI scripts.
-#
+#   Two-pass scripts/config + olddefconfig guarantees symbols stick.
 # ============================================================================
 
 name: Build SM8550 Kernel — KSU Matrix
@@ -251,16 +236,8 @@ jobs:
           echo "SUSFSSKIPKSUDRIVERPATCH=${{ matrix.skip_drv_patch }}" >> $GITHUB_ENV
 
       # ── 5. Install KPM uapi headers + fix include paths (FIX 6 + FIX 7) ─
-      #
-      # FIX 6: kpm/compact.c does #include "policy/allowlist.h"
-      #   Compiler searches relative to kpm/ → looks for kpm/policy/allowlist.h
-      #   Actual location: drivers/kernelsu/policy/allowlist.h
-      #   Fix: add ccflags-y to the kpm/Makefile pointing at drivers/kernelsu/
-      #
-      # FIX 7: feature/kernel_umount.c uses ksu_cred but the header that
-      #   declares it (ksu.h) is not included after the v4.1.x refactor.
-      #   Fix A: add ccflags-y to feature/Makefile for the same -I path
-      #   Fix B: prepend #include "ksu.h" to kernel_umount.c if missing
+      #      FIXED: now patches the ACTUAL build location drivers/kernelsu/
+      #      (setup.sh copies/integrates the KSU code into drivers/kernelsu/)
       - name: Install KPM uapi headers + patch include paths
         if: matrix.enable_kpm == 'true'
         run: |
@@ -293,49 +270,34 @@ jobs:
               || { echo "ERROR: include/uapi/${HDR} missing after install"; exit 1; }
           done
 
-          # ── FIX 6: patch kpm/Makefile to add drivers/kernelsu to include path ──
-          KPM_MK="${KSU_DIR}/kpm/Makefile"
-          if [ -f "${KPM_MK}" ]; then
-            if ! grep -q 'drivers/kernelsu' "${KPM_MK}"; then
-              echo "" >> "${KPM_MK}"
-              echo '# FIX 6: expose drivers/kernelsu/ so policy/allowlist.h resolves' >> "${KPM_MK}"
-              echo 'ccflags-y += -I$(srctree)/drivers/kernelsu' >> "${KPM_MK}"
-              echo "Patched ${KPM_MK} with -I$(srctree)/drivers/kernelsu"
+          # ── FIX 6 + FIX 7: patch the REAL build location (drivers/kernelsu/) ──
+          for DIR in kpm feature; do
+            MK="drivers/kernelsu/${DIR}/Makefile"
+            if [ -f "${MK}" ]; then
+              if ! grep -q 'drivers/kernelsu' "${MK}"; then
+                echo "" >> "${MK}"
+                echo '# FIX 6/7: expose drivers/kernelsu/ so policy/allowlist.h and ksu.h resolve' >> "${MK}"
+                echo 'ccflags-y += -I$(srctree)/drivers/kernelsu' >> "${MK}"
+                echo "Patched ${MK} with -I$(srctree)/drivers/kernelsu"
+              else
+                echo "${MK} already contains the include path — skip."
+              fi
             else
-              echo "kpm/Makefile already contains the include path — skip."
+              echo "WARNING: ${MK} not found — KPM may not be present in this variant."
             fi
-          else
-            echo "WARNING: ${KPM_MK} not found — KPM Makefile may be at a different path."
-            find "${KSU_DIR}" -name "Makefile" | head -10 || true
-          fi
-
-          # ── FIX 7a: patch feature/Makefile for the same include path ──────────
-          FEAT_MK="${KSU_DIR}/feature/Makefile"
-          if [ -f "${FEAT_MK}" ]; then
-            if ! grep -q 'drivers/kernelsu' "${FEAT_MK}"; then
-              echo "" >> "${FEAT_MK}"
-              echo '# FIX 7a: expose drivers/kernelsu/ so ksu.h resolves in kernel_umount.c' >> "${FEAT_MK}"
-              echo 'ccflags-y += -I$(srctree)/drivers/kernelsu' >> "${FEAT_MK}"
-              echo "Patched ${FEAT_MK}"
-            else
-              echo "feature/Makefile already has the path — skip."
-            fi
-          else
-            echo "WARNING: ${FEAT_MK} not found."
-            find "${KSU_DIR}" -name "Makefile" | head -10 || true
-          fi
+          done
 
           # ── FIX 7b: ensure ksu.h is included in kernel_umount.c ─────────────
-          UMOUNT_C="${KSU_DIR}/feature/kernel_umount.c"
+          UMOUNT_C="drivers/kernelsu/feature/kernel_umount.c"
           if [ -f "${UMOUNT_C}" ]; then
             if ! grep -q '#include "ksu.h"' "${UMOUNT_C}"; then
-              # Prepend after the last existing #include line
-              sed -i '0,/#include/{//a #include "ksu.h"  /* FIX 7b: ksu_cred declaration */
-              }' "${UMOUNT_C}" \
-                || { echo "WARNING: sed on kernel_umount.c failed, trying alternate method"; \
-                     sed -i '1s/^/#include "ksu.h"  \/* FIX 7b *\/\n/' "${UMOUNT_C}"; }
+              # Prepend after the last existing #include line (more reliable sed)
+              if ! sed -i '0,/#include/{//a #include "ksu.h"  /* FIX 7b: ksu_cred declaration */}' "${UMOUNT_C}" 2>/dev/null; then
+                echo "WARNING: primary sed failed, using fallback prepend"
+                sed -i '1s/^/#include "ksu.h"  \/* FIX 7b *\/\n/' "${UMOUNT_C}"
+              fi
               echo "Patched ${UMOUNT_C} — added #include \"ksu.h\""
-              head -5 "${UMOUNT_C}"
+              head -8 "${UMOUNT_C}"
             else
               echo "kernel_umount.c already includes ksu.h — skip."
             fi
@@ -394,21 +356,6 @@ jobs:
             gki_defconfig
 
       # ── 10. Enable SUSFS + KPM kernel configs (TWO-PASS) ────────────────
-      #
-      # FIX 8: Add CONFIG_MODULES=y for KPM runtime symbol resolution.
-      #   ReSukiSU/SukiSU-Ultra KPM init calls module_alloc() via kallsyms
-      #   at boot. On SM8550 GKI kernels, module_alloc is only present in
-      #   the kallsyms table when CONFIG_MODULES=y. Without it, kpm_init()
-      #   fails silently and the manager reports "KPM unsupported".
-      #   CONFIG_MODULES=y does NOT enable loadable module loading by itself —
-      #   the kernel remains monolithic. It only ensures the module_alloc
-      #   symbol exists in the kallsyms table for KPM's internal resolver.
-      #
-      # FIX 9: Two-pass config approach.
-      #   Pass 1: scripts/config -e ... → olddefconfig  (resolves deps)
-      #   Pass 2: scripts/config -e ... → olddefconfig  (re-applies after
-      #           dep resolution, ensures nothing got reset by dep propagation)
-      #   This pattern matches what Android GKI CI scripts do.
       - name: Enable SUSFS + KPM kernel configs
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
@@ -435,9 +382,6 @@ jobs:
                 -e CONFIG_KALLSYMS \
                 -e CONFIG_KALLSYMS_ALL \
                 -e CONFIG_MODULES
-              # CONFIG_MODULES=y is required for module_alloc() to appear in
-              # the kallsyms table, which KPM init needs at runtime (FIX 8).
-              # This does NOT make the kernel load external .ko modules.
             fi
           }
 
