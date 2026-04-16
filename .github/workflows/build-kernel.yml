@@ -324,6 +324,23 @@ jobs:
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             olddefconfig
+# ── 10. Upstream Refactor Fixes ──────────────────────────────────────
+      - name: Patch Header Refactors
+        run: |
+          echo "==> Applying fixes for missing KSU identifiers..."
+          
+          # Fix for 'ksu_cred', 'allow_shell', and 'ksu_late_loaded'
+          # These are often used in patched core files but missing from headers in latest SukiSU versions.
+          sed -i '/#include <linux\/cred.h>/a \
+          extern struct cred *ksu_cred;\
+          extern bool allow_shell;\
+          extern bool ksu_late_loaded;' include/linux/cred.h
+
+          # Ensure it is visible to process-related patches
+          sed -i '/#include <linux\/types.h>/a \
+          extern bool ksu_late_loaded;' include/linux/sched.h
+          
+          echo "==> Headers patched successfully."
 
       - name: Build kernel (${{ matrix.display_name }})
         run: |
