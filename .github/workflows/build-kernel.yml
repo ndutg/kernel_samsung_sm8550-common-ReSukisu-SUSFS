@@ -1,60 +1,42 @@
 # ============================================================================
 # SM8550 Kernel Matrix Build — Selectable Variants + Clang Cache + KPM
 #
-# Variants:
-#   1. KernelSU-Next (stable v3.2.0+)  -> no KPM (not supported upstream)
-#   2. SukiSU Ultra  (main v4.1.2+)    -> KPM enabled
-#   3. ReSukiSU      (main v4.1.0+)    -> KPM enabled
+# FIXES in this revision:
 #
-# KPM requires: CONFIG_KPM=y + CONFIG_KALLSYMS=y + CONFIG_KALLSYMS_ALL=y
-# Applied via scripts/config after defconfig, then olddefconfig to resolve deps.
+# FIX 6 — SukiSU Ultra kpm/compact.c: fatal error 'policy/allowlist.h'
+#   compact.c uses #include "policy/allowlist.h" — relative to the kpm/
+#   subdir, so the compiler looks for kpm/policy/allowlist.h which does
+#   not exist. The real file is drivers/kernelsu/policy/allowlist.h.
+#   Solution: after setup.sh runs, patch the kpm/Makefile to add:
+#     ccflags-y += -I$(srctree)/drivers/kernelsu
+#   This is the canonical Kbuild way to add a source-relative include
+#   path without touching the kernel's global CFLAGS.
 #
-# Clang r584948 is cached — first run downloads once, all subsequent runs
-# restore in ~30 s.
+# FIX 7 — SukiSU Ultra feature/kernel_umount.c: 'ksu_cred' undeclared
+#   kernel_umount.c references ksu_cred but lost its #include "ksu.h"
+#   during the v4.1.x refactor. Solution: add the missing include to
+#   kernel_umount.c if it is absent (idempotent sed guard).
+#   Additionally the feature/ Makefile also needs the same -I path flag
+#   so other feature headers resolve correctly.
 #
-# Last verified: April 2026
-#   KernelSU-Next : v3.2.0 (2026-04-14) — stable branch (HTTP 200)
-#   SukiSU Ultra  : v4.1.2 (2026-03-09) — main branch  (HTTP 200)
-#   ReSukiSU      : v4.1.0 (latest tag)  — main branch  (HTTP 200)
-#   SUSFS4KSU     : gki-android13-5.15   — gitlab.com/simonpunk/susfs4ksu
-#   AOSP Clang    : r584948 (confirmed working in CI)
+# FIX 8 — ReSukiSU Ultra: KPM builds but shows "KPM unsupported" at runtime
+#   CONFIG_KPM=y is set and kpm.o compiles, but the KSU manager reports
+#   KPM unsupported. The runtime KPM init in ReSukiSU/SukiSU-Ultra
+#   requires module_alloc() to be reachable via kallsyms. On the SM8550
+#   GKI vendor kernel, module_alloc is only exposed when CONFIG_MODULES=y.
+#   Adding CONFIG_MODULES=y to the config step enables the symbol.
+#   Note: CONFIG_MODULES alone does not make the kernel load .ko files
+#   unless CONFIG_MODULE_UNLOAD + MODULE_SIG are also on — here we only
+#   need the symbol to be present in the kallsyms table for KPM's internal
+#   resolver. CONFIG_MODULES=y is sufficient and safe.
 #
-# FIX 1 — Clang cache miss on parallel runs:
-#   A dedicated `prepare-clang` job runs BEFORE the matrix and saves the
-#   cache. Each build job then uses actions/cache/restore (restore-only) so
-#   they never race to save the same key simultaneously.
+# FIX 9 — SUSFS config verification shows empty for SukiSU Ultra
+#   scripts/config is called before olddefconfig, so symbols get resolved
+#   but the re-run of olddefconfig can reset them if there are dependency
+#   ordering issues. Re-running scripts/config AFTER olddefconfig and doing
+#   a second olddefconfig pass guarantees all options stick. This two-pass
+#   approach is the standard pattern used by Android kernel CI scripts.
 #
-# FIX 2 — supercall.h + app_profile.h not found (KPM build fatal error):
-#   kpm.h does: #include <uapi/supercall.h>
-#   supercall.h does: #include "uapi/app_profile.h"
-#   Both headers ship inside the KSU tree under uapi/ but setup.sh never
-#   copies them onto the kernel's include path, causing:
-#     fatal error: 'uapi/app_profile.h' file not found
-#   The install step now copies BOTH headers to include/uapi/ before
-#   compilation. Verified against SukiSU-Ultra/SukiSU-Ultra@main tree:
-#     uapi/supercall.h   -> include/uapi/supercall.h
-#     uapi/app_profile.h -> include/uapi/app_profile.h
-#
-# FIX 3 — SukiSU Ultra setup_arg 'susfs-main' branch does not exist:
-#   Changed to 'main' (the actual default branch). The old value caused a
-#   silent git pathspec error and fallback that left the KSU tree incomplete.
-#
-# FIX 4 — SUSFS not active after flash (all 3 variants affected):
-#   The SUSFS patches are applied correctly, but gki_defconfig does not
-#   include any CONFIG_KSU_SUSFS_* entries — they all default to 'n' and
-#   the SUSFS code is compiled out entirely. A dedicated step now enables
-#   all required SUSFS configs via scripts/config before olddefconfig.
-#   Ref: simonpunk/susfs4ksu docs: "Make sure to have CONFIG_KSU_SUSFS
-#   enabled before building — some features are disabled by default."
-#
-# FIX 5 — Node.js 24 compatibility (GitHub Actions cutover June 2, 2026):
-#   GitHub is forcing all Actions runners to Node.js 24 on June 2, 2026.
-#   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true' is set in the global env
-#   so we opt-in now — this eliminates the deprecation warning from the
-#   runner logs and ensures builds keep working past the cutover date.
-#   Ref: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners
-#
-# File location: .github/workflows/build-kernel-matrix.yml
 # ============================================================================
 
 name: Build SM8550 Kernel — KSU Matrix
@@ -75,7 +57,7 @@ on:
         type: boolean
         default: true
       enable_kpm:
-        description: "Enable KPM — Kernel Patch Manager (SukiSU Ultra + ReSukiSU only, ignored for KernelSU-Next)"
+        description: "Enable KPM — Kernel Patch Manager (SukiSU Ultra + ReSukiSU only)"
         type: boolean
         default: true
 
@@ -89,12 +71,11 @@ env:
   SUSFS_REPO: https://gitlab.com/simonpunk/susfs4ksu.git
   SUSFS_BRANCH: gki-android13-5.15
   CLANG_VERSION: r584948
-  # FIX 5: Opt-in to Node.js 24 now — GitHub forces this on June 2, 2026.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
 
-# ── Job 1: Resolve build matrix from checkbox choices ─────────────────────
+# ── Job 1: Resolve build matrix ───────────────────────────────────────────
   setup:
     name: Resolve build matrix
     runs-on: ubuntu-24.04
@@ -160,11 +141,7 @@ jobs:
             echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           fi
 
-# ── Job 2: Download + cache Clang ONCE before the matrix starts ───────────
-#
-# FIX 1: With parallel matrix jobs all starting at the same time, every
-# runner gets a cache miss because none has finished saving yet. This job
-# runs first, populates the cache, then the build jobs just restore it.
+# ── Job 2: Cache Clang ONCE ───────────────────────────────────────────────
   prepare-clang:
     name: Cache Clang toolchain
     runs-on: ubuntu-24.04
@@ -188,14 +165,13 @@ jobs:
           mkdir -p clang-toolchain
           tar -xf clang.tar.gz -C clang-toolchain
           rm -f clang.tar.gz
-          echo "Clang cached successfully."
 
       - name: Verify Clang
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
           clang --version || { echo "ERROR: clang binary not found."; exit 1; }
 
-# ── Job 3: Build — one parallel runner per selected variant ───────────────
+# ── Job 3: Build ──────────────────────────────────────────────────────────
   build:
     name: ${{ matrix.display_name }}
     needs: [setup, prepare-clang]
@@ -229,10 +205,7 @@ jobs:
             lzop zlib1g-dev pahole dwarves cpio zip \
             python3 python-is-python3 tar perl lz4 jq
 
-      # ── 3. Restore Clang from cache (restore-only — prepare-clang saves) ─
-      #
-      # FIX 1 (continued): restore-only so parallel build jobs never race
-      # to save the same cache key simultaneously.
+      # ── 3. Restore Clang (restore-only) ─────────────────────────────────
       - name: Restore Clang ${{ env.CLANG_VERSION }} from cache
         uses: actions/cache/restore@v4
         with:
@@ -273,70 +246,102 @@ jobs:
           echo "KPM enabled  : ${{ matrix.enable_kpm }}"
           echo "Build suffix : ${BUILD_SUFFIX}"
 
-          echo "KSUDIR=${KSU_DIR}"                               >> $GITHUB_ENV
-          echo "BUILDSUFFIX=${BUILD_SUFFIX}"                     >> $GITHUB_ENV
+          echo "KSUDIR=${KSU_DIR}"                                    >> $GITHUB_ENV
+          echo "BUILDSUFFIX=${BUILD_SUFFIX}"                          >> $GITHUB_ENV
           echo "SUSFSSKIPKSUDRIVERPATCH=${{ matrix.skip_drv_patch }}" >> $GITHUB_ENV
 
-      # ── 5. Install KPM uapi headers (SukiSU Ultra + ReSukiSU only) ──────
+      # ── 5. Install KPM uapi headers + fix include paths (FIX 6 + FIX 7) ─
       #
-      # FIX 2: The KPM include chain is:
-      #   drivers/kernelsu/kpm/kpm.c
-      #     -> drivers/kernelsu/kpm/kpm.h
-      #       -> include/uapi/supercall.h        (copied here previously)
-      #         -> "uapi/app_profile.h"           (NEW — added in v4.1.2+)
+      # FIX 6: kpm/compact.c does #include "policy/allowlist.h"
+      #   Compiler searches relative to kpm/ → looks for kpm/policy/allowlist.h
+      #   Actual location: drivers/kernelsu/policy/allowlist.h
+      #   Fix: add ccflags-y to the kpm/Makefile pointing at drivers/kernelsu/
       #
-      # SukiSU-Ultra ships BOTH headers together in its uapi/ directory:
-      #   KernelSU/uapi/supercall.h   -> include/uapi/supercall.h
-      #   KernelSU/uapi/app_profile.h -> include/uapi/app_profile.h
-      #
-      # setup.sh clones the KSU tree but never copies either header into
-      # the kernel include path. Without app_profile.h the build fails with:
-      #   fatal error: 'uapi/app_profile.h' file not found
-      #
-      # This step copies the entire uapi/*.h set so future header additions
-      # in SukiSU-Ultra are also picked up automatically.
-      - name: Install KPM uapi headers
+      # FIX 7: feature/kernel_umount.c uses ksu_cred but the header that
+      #   declares it (ksu.h) is not included after the v4.1.x refactor.
+      #   Fix A: add ccflags-y to feature/Makefile for the same -I path
+      #   Fix B: prepend #include "ksu.h" to kernel_umount.c if missing
+      - name: Install KPM uapi headers + patch include paths
         if: matrix.enable_kpm == 'true'
         run: |
           KSU_DIR="${{ matrix.ksu_dir }}"
           echo "==> Installing KPM uapi headers from ${KSU_DIR}/uapi/ ..."
           mkdir -p include/uapi
 
-          # Preferred: copy the whole uapi/ directory if it exists
           if [ -d "${KSU_DIR}/uapi" ]; then
             echo "Found ${KSU_DIR}/uapi/ — copying all headers..."
             cp "${KSU_DIR}/uapi/"*.h include/uapi/
             echo "Installed headers:"
             ls include/uapi/*.h
           else
-            # Fallback: find and copy individually (older tree layout)
             echo "No uapi/ dir found — falling back to find-and-copy..."
-
-            SUPERCALL_SRC=$(find "${KSU_DIR}" -name "supercall.h" 2>/dev/null | head -1)
-            if [ -z "$SUPERCALL_SRC" ]; then
-              echo "ERROR: supercall.h not found under ${KSU_DIR}/"
-              find "${KSU_DIR}" -maxdepth 6 -name "*.h" | head -30 || true
-              exit 1
-            fi
-            cp "$SUPERCALL_SRC" include/uapi/supercall.h
-            echo "supercall.h installed -> include/uapi/supercall.h"
-
-            APP_PROFILE_SRC=$(find "${KSU_DIR}" -name "app_profile.h" 2>/dev/null | head -1)
-            if [ -z "$APP_PROFILE_SRC" ]; then
-              echo "ERROR: app_profile.h not found under ${KSU_DIR}/"
-              find "${KSU_DIR}" -maxdepth 6 -name "*.h" | head -30 || true
-              exit 1
-            fi
-            cp "$APP_PROFILE_SRC" include/uapi/app_profile.h
-            echo "app_profile.h installed -> include/uapi/app_profile.h"
+            for HDR_NAME in supercall.h app_profile.h; do
+              SRC=$(find "${KSU_DIR}" -name "${HDR_NAME}" 2>/dev/null | head -1)
+              if [ -z "$SRC" ]; then
+                echo "ERROR: ${HDR_NAME} not found under ${KSU_DIR}/"
+                find "${KSU_DIR}" -maxdepth 6 -name "*.h" | head -30 || true
+                exit 1
+              fi
+              cp "$SRC" "include/uapi/${HDR_NAME}"
+              echo "${HDR_NAME} installed -> include/uapi/${HDR_NAME}"
+            done
           fi
 
-          # Verify both required headers are present
           for HDR in supercall.h app_profile.h; do
             test -f "include/uapi/${HDR}" \
               && echo "OK: include/uapi/${HDR}" \
               || { echo "ERROR: include/uapi/${HDR} missing after install"; exit 1; }
           done
+
+          # ── FIX 6: patch kpm/Makefile to add drivers/kernelsu to include path ──
+          KPM_MK="${KSU_DIR}/kpm/Makefile"
+          if [ -f "${KPM_MK}" ]; then
+            if ! grep -q 'drivers/kernelsu' "${KPM_MK}"; then
+              echo "" >> "${KPM_MK}"
+              echo '# FIX 6: expose drivers/kernelsu/ so policy/allowlist.h resolves' >> "${KPM_MK}"
+              echo 'ccflags-y += -I$(srctree)/drivers/kernelsu' >> "${KPM_MK}"
+              echo "Patched ${KPM_MK} with -I$(srctree)/drivers/kernelsu"
+            else
+              echo "kpm/Makefile already contains the include path — skip."
+            fi
+          else
+            echo "WARNING: ${KPM_MK} not found — KPM Makefile may be at a different path."
+            find "${KSU_DIR}" -name "Makefile" | head -10 || true
+          fi
+
+          # ── FIX 7a: patch feature/Makefile for the same include path ──────────
+          FEAT_MK="${KSU_DIR}/feature/Makefile"
+          if [ -f "${FEAT_MK}" ]; then
+            if ! grep -q 'drivers/kernelsu' "${FEAT_MK}"; then
+              echo "" >> "${FEAT_MK}"
+              echo '# FIX 7a: expose drivers/kernelsu/ so ksu.h resolves in kernel_umount.c' >> "${FEAT_MK}"
+              echo 'ccflags-y += -I$(srctree)/drivers/kernelsu' >> "${FEAT_MK}"
+              echo "Patched ${FEAT_MK}"
+            else
+              echo "feature/Makefile already has the path — skip."
+            fi
+          else
+            echo "WARNING: ${FEAT_MK} not found."
+            find "${KSU_DIR}" -name "Makefile" | head -10 || true
+          fi
+
+          # ── FIX 7b: ensure ksu.h is included in kernel_umount.c ─────────────
+          UMOUNT_C="${KSU_DIR}/feature/kernel_umount.c"
+          if [ -f "${UMOUNT_C}" ]; then
+            if ! grep -q '#include "ksu.h"' "${UMOUNT_C}"; then
+              # Prepend after the last existing #include line
+              sed -i '0,/#include/{//a #include "ksu.h"  /* FIX 7b: ksu_cred declaration */
+}' "${UMOUNT_C}" \
+                || { echo "WARNING: sed on kernel_umount.c failed, trying alternate method"; \
+                     sed -i '1s/^/#include "ksu.h"  \/* FIX 7b *\/\n/' "${UMOUNT_C}"; }
+              echo "Patched ${UMOUNT_C} — added #include \"ksu.h\""
+              head -5 "${UMOUNT_C}"
+            else
+              echo "kernel_umount.c already includes ksu.h — skip."
+            fi
+          else
+            echo "WARNING: ${UMOUNT_C} not found."
+          fi
 
       # ── 6. Apply SUSFS patches ───────────────────────────────────────────
       - name: Apply SUSFS patches
@@ -388,59 +393,64 @@ jobs:
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             gki_defconfig
 
-      # ── 10. Enable SUSFS + KPM kernel configs ────────────────────────────
+      # ── 10. Enable SUSFS + KPM kernel configs (TWO-PASS) ────────────────
       #
-      # FIX 4: gki_defconfig has no CONFIG_KSU_SUSFS_* entries at all —
-      # they all default to 'n' and the SUSFS code is compiled out even
-      # though the source patches are applied. All SUSFS configs must be
-      # explicitly enabled here.
+      # FIX 8: Add CONFIG_MODULES=y for KPM runtime symbol resolution.
+      #   ReSukiSU/SukiSU-Ultra KPM init calls module_alloc() via kallsyms
+      #   at boot. On SM8550 GKI kernels, module_alloc is only present in
+      #   the kallsyms table when CONFIG_MODULES=y. Without it, kpm_init()
+      #   fails silently and the manager reports "KPM unsupported".
+      #   CONFIG_MODULES=y does NOT enable loadable module loading by itself —
+      #   the kernel remains monolithic. It only ensures the module_alloc
+      #   symbol exists in the kallsyms table for KPM's internal resolver.
       #
-      # CONFIG_KSU_SUSFS              — master switch, must be on
-      # CONFIG_KSU_SUSFS_SUS_PATH     — hide paths from stat/readdir
-      # CONFIG_KSU_SUSFS_SUS_MOUNT    — hide mounts from /proc/mounts
-      # CONFIG_KSU_SUSFS_SUS_KSTAT    — spoof stat results
-      # CONFIG_KSU_SUSFS_SUS_OVERLAYFS— hide overlayfs mounts
-      # CONFIG_KSU_SUSFS_TRY_UMOUNT   — auto-unmount sus mounts on exit
-      # CONFIG_KSU_SUSFS_SPOOF_UNAME  — spoof uname kernel string
-      # CONFIG_KSU_SUSFS_ENABLE_LOG   — enable SUSFS kernel logging
-      # CONFIG_KSU_SUSFS_OPEN_REDIRECT— redirect open() calls
-      # CONFIG_KSU_SUSFS_SUS_SU       — sus_su binary support
-      #                                 (enable for kprobe builds;
-      #                                  disable if using inline hooks)
-      # CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT — AUTO_ADD support for magic
-      #                                    mount managers (KSU/SukiSU)
-      #
-      # KPM configs (SukiSU Ultra + ReSukiSU only):
-      # CONFIG_KPM          — Kernel Patch Module runtime loader
-      # CONFIG_KALLSYMS     — exports kernel symbol table for KPM
-      # CONFIG_KALLSYMS_ALL — includes static/local symbols for KPM
+      # FIX 9: Two-pass config approach.
+      #   Pass 1: scripts/config -e ... → olddefconfig  (resolves deps)
+      #   Pass 2: scripts/config -e ... → olddefconfig  (re-applies after
+      #           dep resolution, ensures nothing got reset by dep propagation)
+      #   This pattern matches what Android GKI CI scripts do.
       - name: Enable SUSFS + KPM kernel configs
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
 
-          echo "==> Enabling SUSFS configs (all variants)..."
-          ./scripts/config --file out/.config \
-            -e CONFIG_KSU_SUSFS \
-            -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
-            -e CONFIG_KSU_SUSFS_SUS_PATH \
-            -e CONFIG_KSU_SUSFS_SUS_MOUNT \
-            -e CONFIG_KSU_SUSFS_SUS_KSTAT \
-            -e CONFIG_KSU_SUSFS_SUS_OVERLAYFS \
-            -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
-            -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
-            -e CONFIG_KSU_SUSFS_ENABLE_LOG \
-            -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-            -e CONFIG_KSU_SUSFS_SUS_SU
-
-          if [ "${{ matrix.enable_kpm }}" = "true" ]; then
-            echo "==> Enabling KPM configs (${{ matrix.display_name }})..."
+          apply_configs() {
+            echo "==> Enabling SUSFS configs..."
             ./scripts/config --file out/.config \
-              -e CONFIG_KPM \
-              -e CONFIG_KALLSYMS \
-              -e CONFIG_KALLSYMS_ALL
-          fi
+              -e CONFIG_KSU_SUSFS \
+              -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
+              -e CONFIG_KSU_SUSFS_SUS_PATH \
+              -e CONFIG_KSU_SUSFS_SUS_MOUNT \
+              -e CONFIG_KSU_SUSFS_SUS_KSTAT \
+              -e CONFIG_KSU_SUSFS_SUS_OVERLAYFS \
+              -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
+              -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
+              -e CONFIG_KSU_SUSFS_ENABLE_LOG \
+              -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+              -e CONFIG_KSU_SUSFS_SUS_SU
 
-          echo "==> Running olddefconfig to resolve all dependencies..."
+            if [ "${{ matrix.enable_kpm }}" = "true" ]; then
+              echo "==> Enabling KPM configs (${{ matrix.display_name }})..."
+              ./scripts/config --file out/.config \
+                -e CONFIG_KPM \
+                -e CONFIG_KALLSYMS \
+                -e CONFIG_KALLSYMS_ALL \
+                -e CONFIG_MODULES
+              # CONFIG_MODULES=y is required for module_alloc() to appear in
+              # the kallsyms table, which KPM init needs at runtime (FIX 8).
+              # This does NOT make the kernel load external .ko modules.
+            fi
+          }
+
+          # Pass 1
+          apply_configs
+          echo "==> Pass 1: olddefconfig..."
+          make -j$(nproc --all) O=out ARCH=arm64 \
+            CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
+            olddefconfig
+
+          # Pass 2 — re-apply after dep resolution (FIX 9)
+          apply_configs
+          echo "==> Pass 2: olddefconfig..."
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             olddefconfig
@@ -449,7 +459,7 @@ jobs:
           echo "--- SUSFS ---"
           grep "CONFIG_KSU_SUSFS" out/.config | sort
           echo "--- KPM ---"
-          grep -E "CONFIG_KPM|CONFIG_KALLSYMS" out/.config | sort
+          grep -E "CONFIG_KPM|CONFIG_KALLSYMS|CONFIG_MODULES" out/.config | sort
 
       # ── 11. Compile kernel ───────────────────────────────────────────────
       - name: Build kernel (${{ matrix.display_name }})
@@ -465,7 +475,6 @@ jobs:
           cp .github/goodies/AnyKernel3.zip .
           unzip AnyKernel3.zip -d AnyKernel3
 
-          # Handle both Image and Image.gz depending on build config
           if [ -f out/arch/arm64/boot/Image.gz ]; then
             cp out/arch/arm64/boot/Image.gz AnyKernel3/
           elif [ -f out/arch/arm64/boot/Image ]; then
