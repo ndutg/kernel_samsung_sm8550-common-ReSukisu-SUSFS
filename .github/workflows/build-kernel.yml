@@ -507,22 +507,14 @@ jobs:
           echo "==> Headers patched successfully."
           
 # ── FIX: Bridge stubs for inline KSU/SUSFS hooks ──────────────────────
-      # The kernel source has pre-baked non-kprobes KSU hook calls.
-      # SukiSU Ultra in kprobes mode doesn't provide these symbols.
-      # We add no-op stubs so the linker resolves them.
       - name: Create KSU hook bridge stubs
         run: |
           echo "==> Creating bridge stubs for pre-baked KSU hooks..."
-          STUB_FILE="drivers/kernelsu/ksu_hooks_bridge.c"
+          STUB_FILE="kernel/ksu_hooks_bridge.c"
           cat > "$STUB_FILE" << 'STUBEOF'
           #include <linux/types.h>
           #include <linux/fs.h>
-          #include <linux/input.h>
           #include <linux/version.h>
-
-          /* Stub implementations for non-kprobes KSU hooks already
-             patched into this kernel source. In kprobes mode these
-             are unused — the real hooking is done via kprobes. */
 
           int __attribute__((weak)) ksu_handle_sys_reboot(void) { return 0; }
           int __attribute__((weak)) ksu_handle_sys_read(unsigned int fd,
@@ -550,16 +542,17 @@ jobs:
           unsigned int __attribute__((weak)) susfs_priv_app_sid = 0;
           STUBEOF
 
-          # Remove leading spaces from heredoc (YAML indentation artifact)
+          # Strip YAML heredoc indentation
           sed -i 's/^          //' "$STUB_FILE"
 
-          # Add to KernelSU Makefile so it gets compiled
-          MAIN_MK="drivers/kernelsu/Makefile"
-          if ! grep -q 'ksu_hooks_bridge' "$MAIN_MK"; then
-            echo 'obj-y += ksu_hooks_bridge.o' >> "$MAIN_MK"
+          # Add to kernel/Makefile (simple, reliable Makefile)
+          if ! grep -q 'ksu_hooks_bridge' kernel/Makefile; then
+            echo 'obj-y += ksu_hooks_bridge.o' >> kernel/Makefile
           fi
 
           echo "==> Bridge stubs created at $STUB_FILE"
+          echo "==> Verifying Makefile entry..."
+          grep 'ksu_hooks_bridge' kernel/Makefile || echo "WARNING: Entry not found!"
 
       # ── 14. Build kernel ──────────────────────────────────────────────────
       - name: Build kernel (${{ matrix.display_name }})
