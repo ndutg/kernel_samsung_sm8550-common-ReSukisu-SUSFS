@@ -536,12 +536,6 @@ jobs:
           int __attribute__((weak)) ksu_init_rc_hook(const char *data,
               unsigned long count) { return 0; }
 
-          /* SUSFS bridge symbols */
-          bool __attribute__((weak)) susfs_is_current_ksu_domain(void) { return false; }
-          unsigned int __attribute__((weak)) susfs_ksu_sid = 0;
-          unsigned int __attribute__((weak)) susfs_priv_app_sid = 0;
-          STUBEOF
-
           # Strip YAML heredoc indentation
           sed -i 's/^          //' "$STUB_FILE"
 
