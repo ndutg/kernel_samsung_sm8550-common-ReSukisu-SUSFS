@@ -424,13 +424,6 @@ jobs:
             -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
             -e CONFIG_KSU_SUSFS_SUS_SU
 
-          # Disable LTO for faster builds
-          ./scripts/config --file out/.config \
-            -d CONFIG_LTO_CLANG \
-            -d CONFIG_LTO_CLANG_THIN \
-            -d CONFIG_LTO_CLANG_FULL \
-            -e CONFIG_LTO_NONE
-
           if [ "${{ matrix.enable_kpm }}" = "true" ]; then
             ./scripts/config --file out/.config \
               -e CONFIG_KPM \
