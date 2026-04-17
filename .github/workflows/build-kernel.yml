@@ -355,6 +355,7 @@ jobs:
           fi
 
           ./scripts/config --file out/.config \
+            -d CONFIG_DEBUG_INFO_BTF \
             -e CONFIG_KSU_SUSFS \
             -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
             -e CONFIG_KSU_SUSFS_SUS_PATH \
@@ -378,7 +379,7 @@ jobs:
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             olddefconfig
 
-      - name: Patch Header Refactors
+      - name: Patch Header Refactors & Legacy Stubs
         run: |
           echo "==> Applying fixes for missing KSU identifiers..."
           sed -i '/#include <linux\/cred.h>/a \
@@ -389,6 +390,26 @@ jobs:
           sed -i '/#include <linux\/types.h>/a \
           extern bool ksu_late_loaded;' include/linux/sched.h
           echo "==> Headers patched successfully."
+
+          echo "==> Generating legacy stubs for deprecated inline hooks..."
+          cat << 'EOF' > drivers/kernelsu/legacy_stubs.c
+          #include <linux/types.h>
+          bool ksu_handle_sys_reboot(void) { return false; }
+          void ksu_init_rc_hook(void) {}
+          bool ksu_handle_sys_read(void) { return false; }
+          bool ksu_handle_vfs_fstat(void) { return false; }
+          bool ksu_execveat_hook(void) { return false; }
+          bool ksu_handle_execveat_sucompat(void) { return false; }
+          bool ksu_handle_execveat(void) { return false; }
+          bool ksu_handle_devpts(void) { return false; }
+          bool ksu_input_hook(void) { return false; }
+          bool susfs_is_current_ksu_domain(void) { return false; }
+          u32 susfs_ksu_sid(void) { return 0; }
+          u32 susfs_priv_app_sid(void) { return 0; }
+          EOF
+          
+          echo "obj-y += legacy_stubs.o" >> drivers/kernelsu/Makefile
+          echo "==> Stubs generated and added to KSU Makefile."
 
       - name: Build kernel (${{ matrix.display_name }})
         run: |
