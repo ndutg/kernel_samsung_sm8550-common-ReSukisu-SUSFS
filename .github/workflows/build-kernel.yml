@@ -424,6 +424,13 @@ jobs:
             -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
             -e CONFIG_KSU_SUSFS_SUS_SU
 
+          # Disable LTO for faster builds
+          ./scripts/config --file out/.config \
+            -d CONFIG_LTO_CLANG \
+            -d CONFIG_LTO_CLANG_THIN \
+            -d CONFIG_LTO_CLANG_FULL \
+            -e CONFIG_LTO_NONE
+
           if [ "${{ matrix.enable_kpm }}" = "true" ]; then
             ./scripts/config --file out/.config \
               -e CONFIG_KPM \
@@ -523,6 +530,9 @@ jobs:
             'int __attribute__((weak)) ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }' \
             'int __attribute__((weak)) ksu_handle_execveat_sucompat(int *fd, const char __user **filename_user, void *argv, void *envp, int *flags) { return 0; }' \
             'int __attribute__((weak)) ksu_init_rc_hook(const char *data, unsigned long count) { return 0; }' \
+            'bool __attribute__((weak)) susfs_is_current_ksu_domain(void) { return true; }' \
+            'unsigned int __attribute__((weak)) susfs_ksu_sid;' \
+            'unsigned int __attribute__((weak)) susfs_priv_app_sid;' \
             > kernel/ksu_hooks_bridge.c
           if ! grep -q 'ksu_hooks_bridge' kernel/Makefile; then
             echo 'obj-y += ksu_hooks_bridge.o' >> kernel/Makefile
