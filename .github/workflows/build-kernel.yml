@@ -510,41 +510,25 @@ jobs:
       - name: Create KSU hook bridge stubs
         run: |
           echo "==> Creating bridge stubs for pre-baked KSU hooks..."
-          STUB_FILE="kernel/ksu_hooks_bridge.c"
-          cat > "$STUB_FILE" << 'STUBEOF'
+          cat > kernel/ksu_hooks_bridge.c << 'EOF'
           #include <linux/types.h>
           #include <linux/fs.h>
           #include <linux/version.h>
-
           int __attribute__((weak)) ksu_handle_sys_reboot(void) { return 0; }
-          int __attribute__((weak)) ksu_handle_sys_read(unsigned int fd,
-              char __user *buf, size_t count) { return 0; }
-          int __attribute__((weak)) ksu_handle_vfs_fstat(int fd,
-              struct kstat *stat) { return 0; }
+          int __attribute__((weak)) ksu_handle_sys_read(unsigned int fd, char __user *buf, size_t count) { return 0; }
+          int __attribute__((weak)) ksu_handle_vfs_fstat(int fd, struct kstat *stat) { return 0; }
           int __attribute__((weak)) ksu_handle_devpts(struct inode *inode) { return 0; }
-          int __attribute__((weak)) ksu_input_hook(void *dev,
-              unsigned int type, unsigned int code, int value) { return 0; }
-          int __attribute__((weak)) ksu_execveat_hook(int *fd,
-              struct filename **filename_ptr, void *argv,
-              void *envp, int *flags) { return 0; }
-          int __attribute__((weak)) ksu_handle_execveat(int *fd,
-              struct filename **filename_ptr, void *argv,
-              void *envp, int *flags) { return 0; }
-          int __attribute__((weak)) ksu_handle_execveat_sucompat(int *fd,
-              const char __user **filename_user, void *argv,
-              void *envp, int *flags) { return 0; }
-          int __attribute__((weak)) ksu_init_rc_hook(const char *data,
-              unsigned long count) { return 0; }
-
-          # Strip YAML heredoc indentation
-          sed -i 's/^          //' "$STUB_FILE"
-
-          # Add to kernel/Makefile (simple, reliable Makefile)
+          int __attribute__((weak)) ksu_input_hook(void *dev, unsigned int type, unsigned int code, int value) { return 0; }
+          int __attribute__((weak)) ksu_execveat_hook(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }
+          int __attribute__((weak)) ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }
+          int __attribute__((weak)) ksu_handle_execveat_sucompat(int *fd, const char __user **filename_user, void *argv, void *envp, int *flags) { return 0; }
+          int __attribute__((weak)) ksu_init_rc_hook(const char *data, unsigned long count) { return 0; }
+          EOF
+          sed -i 's/^          //' kernel/ksu_hooks_bridge.c
           if ! grep -q 'ksu_hooks_bridge' kernel/Makefile; then
             echo 'obj-y += ksu_hooks_bridge.o' >> kernel/Makefile
           fi
-
-          echo "==> Bridge stubs created at $STUB_FILE"
+          echo "==> Bridge stubs created."
           echo "==> Verifying Makefile entry..."
           grep 'ksu_hooks_bridge' kernel/Makefile || echo "WARNING: Entry not found!"
 
