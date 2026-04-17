@@ -505,6 +505,61 @@ jobs:
           extern bool ksu_late_loaded;' include/linux/sched.h
 
           echo "==> Headers patched successfully."
+          
+# ── FIX: Bridge stubs for inline KSU/SUSFS hooks ──────────────────────
+      # The kernel source has pre-baked non-kprobes KSU hook calls.
+      # SukiSU Ultra in kprobes mode doesn't provide these symbols.
+      # We add no-op stubs so the linker resolves them.
+      - name: Create KSU hook bridge stubs
+        run: |
+          echo "==> Creating bridge stubs for pre-baked KSU hooks..."
+          STUB_FILE="drivers/kernelsu/ksu_hooks_bridge.c"
+          cat > "$STUB_FILE" << 'STUBEOF'
+          #include <linux/types.h>
+          #include <linux/fs.h>
+          #include <linux/input.h>
+          #include <linux/version.h>
+
+          /* Stub implementations for non-kprobes KSU hooks already
+             patched into this kernel source. In kprobes mode these
+             are unused — the real hooking is done via kprobes. */
+
+          int __attribute__((weak)) ksu_handle_sys_reboot(void) { return 0; }
+          int __attribute__((weak)) ksu_handle_sys_read(unsigned int fd,
+              char __user *buf, size_t count) { return 0; }
+          int __attribute__((weak)) ksu_handle_vfs_fstat(int fd,
+              struct kstat *stat) { return 0; }
+          int __attribute__((weak)) ksu_handle_devpts(struct inode *inode) { return 0; }
+          int __attribute__((weak)) ksu_input_hook(void *dev,
+              unsigned int type, unsigned int code, int value) { return 0; }
+          int __attribute__((weak)) ksu_execveat_hook(int *fd,
+              struct filename **filename_ptr, void *argv,
+              void *envp, int *flags) { return 0; }
+          int __attribute__((weak)) ksu_handle_execveat(int *fd,
+              struct filename **filename_ptr, void *argv,
+              void *envp, int *flags) { return 0; }
+          int __attribute__((weak)) ksu_handle_execveat_sucompat(int *fd,
+              const char __user **filename_user, void *argv,
+              void *envp, int *flags) { return 0; }
+          int __attribute__((weak)) ksu_init_rc_hook(const char *data,
+              unsigned long count) { return 0; }
+
+          /* SUSFS bridge symbols */
+          bool __attribute__((weak)) susfs_is_current_ksu_domain(void) { return false; }
+          unsigned int __attribute__((weak)) susfs_ksu_sid = 0;
+          unsigned int __attribute__((weak)) susfs_priv_app_sid = 0;
+          STUBEOF
+
+          # Remove leading spaces from heredoc (YAML indentation artifact)
+          sed -i 's/^          //' "$STUB_FILE"
+
+          # Add to KernelSU Makefile so it gets compiled
+          MAIN_MK="drivers/kernelsu/Makefile"
+          if ! grep -q 'ksu_hooks_bridge' "$MAIN_MK"; then
+            echo 'obj-y += ksu_hooks_bridge.o' >> "$MAIN_MK"
+          fi
+
+          echo "==> Bridge stubs created at $STUB_FILE"
 
       # ── 14. Build kernel ──────────────────────────────────────────────────
       - name: Build kernel (${{ matrix.display_name }})
