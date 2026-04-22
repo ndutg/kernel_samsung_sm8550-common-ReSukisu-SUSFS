@@ -1,11 +1,11 @@
 # ============================================================
-# build-kernel-sukisu-v4.yml
+# build-kernel-sukisu-v5.yml
 # SukiSU Ultra + SUSFS + Manual Hooks + KPM
 # SM8550 Samsung Galaxy S23 (android13-5.15)
 #
-# v4 FIX: Expanded sed cleanup to cover ALL 7 hook files
-#   and ALL KSU-Next hook identifiers (including shared-name
-#   hooks with different signatures).
+# v5 FIX: Use clean upstream kernel source (samsung-sm8550)
+#   instead of ndutg fork (which has pre-baked KSU-Next hooks).
+#   The SukiSU patch targets clean source — no sed needed.
 # ============================================================
 
 name: Build Kernel – SukiSU Ultra
@@ -14,6 +14,7 @@ on:
   workflow_dispatch:
 
 env:
+  KERNEL_REPO: samsung-sm8550/kernel_samsung_sm8550-common
   KERNEL_BRANCH: android13-5.15
   SUSFS_REPO: https://gitlab.com/simonpunk/susfs4ksu.git
   SUSFS_BRANCH: gki-android13-5.15
@@ -27,11 +28,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ── 1. Checkout kernel source ─────────────────────────────
+      # ── 1. Checkout CLEAN kernel source (no pre-baked hooks) ──
       - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
-          repository: ndutg/kernel_samsung_sm8550-common-ksususfs
+          repository: ${{ env.KERNEL_REPO }}
           ref: ${{ env.KERNEL_BRANCH }}
           fetch-depth: 1
 
@@ -133,7 +134,7 @@ jobs:
             fi
           done
 
-      # ── 7. Apply SUSFS patches (MUST be first) ───────────────
+      # ── 7. Apply SUSFS patches ────────────────────────────────
       - name: Apply SUSFS patches
         run: |
           git clone --depth 1 \
@@ -193,78 +194,12 @@ jobs:
           rm -rf susfs4ksu
 
       # ════════════════════════════════════════════════════════════
-      # ── 8. REMOVE ALL KSU-NEXT HOOKS  ──  ★ v4 FIX ★  ────────
+      # ── 8. Apply SukiSU Ultra manual hooks patch ─────────────
       #
-      #   Runs AFTER SUSFS (needs original layout) but BEFORE
-      #   the SukiSU patch — so every ksu_handle_* line still
-      #   present is guaranteed to be KSU-Next's version.
-      #
-      #   v3 bug:  Only 4 files, 6 patterns — missed shared-name
-      #            hooks (ksu_handle_sys_reboot, ksu_handle_sys_read,
-      #            ksu_input_hook) and missed kernel/reboot.c + input.c
-      #   v4 fix:  All 7 files, 10 patterns, simple sed.
+      #   v5: No sed cleanup needed! The clean upstream source has
+      #   NO pre-baked KSU-Next hooks, so the SukiSU patch applies
+      #   directly to unmodified files.
       # ════════════════════════════════════════════════════════════
-      - name: Remove ALL KSU-Next inline hooks (v4 — complete)
-        run: |
-          echo "==> Removing ALL KSU-Next inline hooks from kernel source..."
-
-          # ── Every KSU-Next hook identifier to remove ──
-          # Group A: KSU-Next exclusive (no SukiSU equivalent)
-          # Group B: Shared names with DIFFERENT signatures
-          # Group C: Static branch keys & guards
-          #
-          # SukiSU patch has NOT been applied yet, so every
-          # match is guaranteed to be KSU-Next code.
-          KSUNEXT_PATTERNS=(
-            # Group A — KSU-Next exclusive
-            "ksu_execveat_hook"
-            "ksu_handle_execveat_sucompat"
-            "ksu_handle_execveat"
-            "ksu_handle_vfs_fstat"
-            "ksu_handle_devpts"
-            # Group B — shared names, different signatures
-            "ksu_handle_sys_reboot"
-            "ksu_handle_sys_read"
-            "ksu_input_hook"
-            # Group C — static keys & guards
-            # "ksu_init_rc_hook" substring-matches "ksu_init_rc_hook_key_false" too
-            "ksu_init_rc_hook"
-            "ksu_vfs_read_hook"
-          )
-
-          # ── Every file that may contain KSU-Next pre-baked hooks ──
-          HOOK_FILES=(
-            "fs/exec.c"
-            "fs/read_write.c"
-            "fs/stat.c"
-            "fs/open.c"
-            "drivers/input/input.c"
-            "kernel/reboot.c"
-            "fs/devpts/inode.c"
-          )
-
-          for file in "${HOOK_FILES[@]}"; do
-            if [ -f "$file" ]; then
-              echo "  Cleaning KSU-Next hooks from: $file"
-
-              for pattern in "${KSUNEXT_PATTERNS[@]}"; do
-                # Delete ANY line containing this KSU-Next identifier
-                sed -i "/${pattern}/d" "$file"
-              done
-
-              # Clean up empty #ifdef CONFIG_KSU blocks left behind
-              perl -0777 -i -pe 's/#ifdef\s+CONFIG_KSU\s*\n(\s*\n)*#endif\s*\n//g' "$file"
-              perl -0777 -i -pe 's/#if\s+defined\(CONFIG_KSU\)\s*\n(\s*\n)*#endif\s*\n//g' "$file"
-
-              echo "    ✓ Done: $file"
-            else
-              echo "  ⚠ File not found (skipped): $file"
-            fi
-          done
-
-          echo "==> All KSU-Next hooks removed from all files."
-
-      # ── 9. Apply SukiSU Ultra manual hooks patch ──────────────
       - name: Apply SukiSU Ultra manual hooks patch
         run: |
           echo "==> Downloading SukiSU Ultra official manual hooks patch..."
@@ -292,7 +227,7 @@ jobs:
           rm -rf sukisu_patch
           echo "==> SukiSU Ultra hook replacement complete."
 
-      # ── 10. Extract kernel version ────────────────────────────
+      # ── 9. Extract kernel version ─────────────────────────────
       - name: Extract kernel version
         id: kver
         run: |
@@ -300,13 +235,13 @@ jobs:
           echo "kernelversion=${KVER}" >> $GITHUB_OUTPUT
           echo "date=$(date +%Y%m%d)"  >> $GITHUB_OUTPUT
 
-      # ── 11. Set swap space ────────────────────────────────────
+      # ── 10. Set swap space ────────────────────────────────────
       - name: Set swap space
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 24
 
-      # ── 12. Generate defconfig ────────────────────────────────
+      # ── 11. Generate defconfig ────────────────────────────────
       - name: Generate defconfig
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
@@ -314,7 +249,7 @@ jobs:
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             gki_defconfig
 
-      # ── 13. Enable config options ─────────────────────────────
+      # ── 12. Enable config options ─────────────────────────────
       - name: Enable KSU + SUSFS + KPM config options
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
@@ -341,7 +276,7 @@ jobs:
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             olddefconfig
 
-      # ── 14. Verify config ─────────────────────────────────────
+      # ── 13. Verify config ─────────────────────────────────────
       - name: Verify kernel config
         run: |
           echo "==> Verifying kernel config options..."
@@ -402,7 +337,7 @@ jobs:
           echo ""
           echo "==> Config verification complete."
 
-      # ── 15. Patch headers for missing identifiers ─────────────
+      # ── 14. Patch headers for missing identifiers ─────────────
       - name: Patch headers for missing identifiers
         run: |
           echo "==> Applying fixes for missing KSU identifiers..."
@@ -415,7 +350,7 @@ jobs:
           extern bool ksu_late_loaded;' include/linux/sched.h
           echo "==> Headers patched successfully."
 
-      # ── 16. Build kernel ──────────────────────────────────────
+      # ── 15. Build kernel ──────────────────────────────────────
       - name: Build kernel
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
@@ -423,7 +358,7 @@ jobs:
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1
 
-      # ── 17. Package output ────────────────────────────────────
+      # ── 16. Package output ────────────────────────────────────
       - name: Package kernel image
         run: |
           echo "==> Packaging kernel..."
@@ -438,7 +373,7 @@ jobs:
           find out/arch/arm64/boot -name "*.dtbo" -exec cp {} upload/ \; 2>/dev/null || true
           echo "==> Kernel packaged."
 
-      # ── 18. Upload artifact ───────────────────────────────────
+      # ── 17. Upload artifact ───────────────────────────────────
       - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
         with:
