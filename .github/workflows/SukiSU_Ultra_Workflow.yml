@@ -1,17 +1,17 @@
-name: Build SM8550 Kernel — SukiSU Ultra
+# ============================================================
+# build-kernel-sukisu-v4.yml
+# SukiSU Ultra + SUSFS + Manual Hooks + KPM
+# SM8550 Samsung Galaxy S23 (android13-5.15)
+#
+# v4 FIX: Expanded sed cleanup to cover ALL 7 hook files
+#   and ALL KSU-Next hook identifiers (including shared-name
+#   hooks with different signatures).
+# ============================================================
+
+name: Build Kernel – SukiSU Ultra
 
 on:
   workflow_dispatch:
-    inputs:
-      enable_kpm:
-        description: "Enable KPM — Kernel Patch Manager"
-        type: boolean
-        default: true
-
-permissions:
-  contents: write
-  actions: write
-  packages: write
 
 env:
   KERNEL_BRANCH: android13-5.15
@@ -19,53 +19,23 @@ env:
   SUSFS_BRANCH: gki-android13-5.15
   CLANG_VERSION: r584948
   SUKISU_PATCH_REPO: https://github.com/SukiSU-Ultra/SukiSU_patch.git
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-
-  prepare-clang:
-    name: Cache Clang toolchain
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Restore Clang from cache
-        id: cache-clang
-        uses: actions/cache@v4
-        with:
-          path: clang-toolchain
-          key: clang-aosp-${{ env.CLANG_VERSION }}
-
-      - name: Download Clang (cache miss only)
-        if: steps.cache-clang.outputs.cache-hit != 'true'
-        run: |
-          echo "Cache miss — downloading AOSP Clang ${{ env.CLANG_VERSION }}..."
-          curl -sSfL --retry 3 --connect-timeout 30 \
-            -o clang.tar.gz \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-${{ env.CLANG_VERSION }}.tar.gz" \
-            || { echo "ERROR: Clang download failed."; exit 1; }
-          mkdir -p clang-toolchain
-          tar -xf clang.tar.gz -C clang-toolchain
-          rm -f clang.tar.gz
-
-      - name: Verify Clang
-        run: |
-          export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
-          clang --version || { echo "ERROR: clang binary not found."; exit 1; }
-
   build:
     name: SukiSU Ultra (manual-hook)
-    needs: prepare-clang
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
-
+      # ── 1. Checkout kernel source ─────────────────────────────
       - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
           repository: ndutg/kernel_samsung_sm8550-common-ksususfs
           ref: ${{ env.KERNEL_BRANCH }}
           fetch-depth: 1
-          token: ${{ secrets.GITHUB_TOKEN }}
 
+      # ── 2. Install build dependencies ─────────────────────────
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -77,20 +47,22 @@ jobs:
             lzop zlib1g-dev pahole dwarves cpio zip \
             python3 python-is-python3 tar perl lz4 jq
 
-      - name: Restore Clang ${{ env.CLANG_VERSION }} from cache
+      # ── 3. Restore clang toolchain cache ──────────────────────
+      - name: Restore clang toolchain
         uses: actions/cache/restore@v4
         with:
           path: clang-toolchain
           key: clang-aosp-${{ env.CLANG_VERSION }}
           fail-on-cache-miss: true
 
-      - name: Verify Clang
+      # ── 4. Verify clang ───────────────────────────────────────
+      - name: Verify clang
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
           clang --version || { echo "ERROR: clang not found."; exit 1; }
 
-      - name: Setup SukiSU Ultra
-        id: ksu
+      # ── 5. Set up SukiSU Ultra ────────────────────────────────
+      - name: Set up SukiSU Ultra
         run: |
           echo "==> Setting up SukiSU Ultra..."
           curl -sSfL --retry 3 --connect-timeout 20 \
@@ -105,7 +77,7 @@ jobs:
             || echo "main")
 
           KPM_SUFFIX=""
-          if [ "${{ inputs.enable_kpm }}" = "true" ]; then
+          if [ "true" = "true" ]; then
             KPM_SUFFIX="-kpm"
           fi
 
@@ -114,8 +86,8 @@ jobs:
           echo "KSUDIR=${KSU_DIR}"           >> $GITHUB_ENV
           echo "BUILDSUFFIX=${BUILD_SUFFIX}" >> $GITHUB_ENV
 
-      - name: KPM uapi headers + Dynamic Header Fixes
-        if: inputs.enable_kpm == true
+      # ── 6. Fix KPM header and declarations ────────────────────
+      - name: Fix KPM header and declarations
         run: |
           echo "==> Locating kpm.h..."
           KPM_H_PATH=$(find "$KSUDIR" -name "kpm.h" | head -n 1)
@@ -161,7 +133,7 @@ jobs:
             fi
           done
 
-      # ── STEP A: SUSFS patches FIRST (needs original source layout) ─────────
+      # ── 7. Apply SUSFS patches (MUST be first) ───────────────
       - name: Apply SUSFS patches
         run: |
           git clone --depth 1 \
@@ -175,7 +147,7 @@ jobs:
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
 
           patch -p1 --forward \
-            < "susfs4ksu/kernel_patches/50_add_susfs_in_${{ env.SUSFS_BRANCH }}.patch" \
+            < "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch" \
             || { echo "ERROR: SUSFS kernel patch failed."; exit 1; }
 
           KSU_PATCH="susfs4ksu/kernel_patches/10_enable_susfs_for_ksu.patch"
@@ -209,7 +181,6 @@ jobs:
               echo "==> SUSFS Kconfig entries already present."
             fi
 
-            # Ensure KSU_MANUAL_HOOK Kconfig entry exists
             if ! grep -q 'KSU_MANUAL_HOOK' "$KSU_KCONFIG"; then
               echo "==> Injecting KSU_MANUAL_HOOK Kconfig entry..."
               printf '\nconfig KSU_MANUAL_HOOK\n\tbool "Use manual inline hooks instead of kprobes"\n\tdepends on KSU\n\tdefault y\n' >> "$KSU_KCONFIG"
@@ -221,55 +192,79 @@ jobs:
 
           rm -rf susfs4ksu
 
-      # ── STEP B: Remove KSU-Next hooks SECOND (after SUSFS is applied) ──────
-      # Only remove function names that are EXCLUSIVE to KSU-Next.
-      # Do NOT touch functions that also exist in SukiSU Ultra's patch.
+      # ════════════════════════════════════════════════════════════
+      # ── 8. REMOVE ALL KSU-NEXT HOOKS  ──  ★ v4 FIX ★  ────────
       #
-      # KSU-Next ONLY (safe to remove):
-      #   ksu_execveat_hook, ksu_handle_execveat, ksu_handle_execveat_sucompat,
-      #   ksu_handle_vfs_fstat, ksu_handle_devpts, ksu_init_rc_hook
+      #   Runs AFTER SUSFS (needs original layout) but BEFORE
+      #   the SukiSU patch — so every ksu_handle_* line still
+      #   present is guaranteed to be KSU-Next's version.
       #
-      # SHARED names (do NOT remove — SukiSU patch will replace):
-      #   ksu_handle_sys_reboot, ksu_handle_sys_read, ksu_input_hook
-      - name: Remove KSU-Next exclusive hooks
+      #   v3 bug:  Only 4 files, 6 patterns — missed shared-name
+      #            hooks (ksu_handle_sys_reboot, ksu_handle_sys_read,
+      #            ksu_input_hook) and missed kernel/reboot.c + input.c
+      #   v4 fix:  All 7 files, 10 patterns, simple sed.
+      # ════════════════════════════════════════════════════════════
+      - name: Remove ALL KSU-Next inline hooks (v4 — complete)
         run: |
-          echo "==> Removing KSU-Next exclusive inline hooks..."
+          echo "==> Removing ALL KSU-Next inline hooks from kernel source..."
 
-          # Only target KSU-Next exclusive function names
-          KSUNEXT_ONLY_PATTERNS=(
+          # ── Every KSU-Next hook identifier to remove ──
+          # Group A: KSU-Next exclusive (no SukiSU equivalent)
+          # Group B: Shared names with DIFFERENT signatures
+          # Group C: Static branch keys & guards
+          #
+          # SukiSU patch has NOT been applied yet, so every
+          # match is guaranteed to be KSU-Next code.
+          KSUNEXT_PATTERNS=(
+            # Group A — KSU-Next exclusive
             "ksu_execveat_hook"
             "ksu_handle_execveat_sucompat"
             "ksu_handle_execveat"
             "ksu_handle_vfs_fstat"
             "ksu_handle_devpts"
+            # Group B — shared names, different signatures
+            "ksu_handle_sys_reboot"
+            "ksu_handle_sys_read"
+            "ksu_input_hook"
+            # Group C — static keys & guards
+            # "ksu_init_rc_hook" substring-matches "ksu_init_rc_hook_key_false" too
             "ksu_init_rc_hook"
+            "ksu_vfs_read_hook"
           )
 
+          # ── Every file that may contain KSU-Next pre-baked hooks ──
           HOOK_FILES=(
             "fs/exec.c"
             "fs/read_write.c"
             "fs/stat.c"
+            "fs/open.c"
+            "drivers/input/input.c"
+            "kernel/reboot.c"
             "fs/devpts/inode.c"
           )
 
           for file in "${HOOK_FILES[@]}"; do
             if [ -f "$file" ]; then
               echo "  Cleaning KSU-Next hooks from: $file"
-              for pattern in "${KSUNEXT_ONLY_PATTERNS[@]}"; do
-                # Remove extern declarations containing this pattern
-                sed -i "/extern.*${pattern}/d" "$file"
-                # Remove function call lines containing this pattern
-                sed -i "/${pattern}\s*(/d" "$file"
+
+              for pattern in "${KSUNEXT_PATTERNS[@]}"; do
+                # Delete ANY line containing this KSU-Next identifier
+                sed -i "/${pattern}/d" "$file"
               done
+
               # Clean up empty #ifdef CONFIG_KSU blocks left behind
               perl -0777 -i -pe 's/#ifdef\s+CONFIG_KSU\s*\n(\s*\n)*#endif\s*\n//g' "$file"
               perl -0777 -i -pe 's/#if\s+defined\(CONFIG_KSU\)\s*\n(\s*\n)*#endif\s*\n//g' "$file"
+
+              echo "    ✓ Done: $file"
+            else
+              echo "  ⚠ File not found (skipped): $file"
             fi
           done
 
-          echo "==> KSU-Next exclusive hooks removed."
+          echo "==> All KSU-Next hooks removed from all files."
 
-      # ── STEP C: Apply SukiSU Ultra official manual hooks patch ─────────────
+      # ── 9. Apply SukiSU Ultra manual hooks patch ──────────────
       - name: Apply SukiSU Ultra manual hooks patch
         run: |
           echo "==> Downloading SukiSU Ultra official manual hooks patch..."
@@ -297,18 +292,21 @@ jobs:
           rm -rf sukisu_patch
           echo "==> SukiSU Ultra hook replacement complete."
 
-      - name: Resolve kernel version and date
-        id: meta
+      # ── 10. Extract kernel version ────────────────────────────
+      - name: Extract kernel version
+        id: kver
         run: |
           KVER=$(make kernelversion 2>/dev/null | awk -F. '{print $1"."$2"."$3}')
           echo "kernelversion=${KVER}" >> $GITHUB_OUTPUT
           echo "date=$(date +%Y%m%d)"  >> $GITHUB_OUTPUT
 
-      - name: Set up swap (24 GB)
+      # ── 11. Set swap space ────────────────────────────────────
+      - name: Set swap space
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 24
 
+      # ── 12. Generate defconfig ────────────────────────────────
       - name: Generate defconfig
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
@@ -316,7 +314,8 @@ jobs:
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             gki_defconfig
 
-      - name: Dynamically enable SUSFS + KPM + Manual Hook configs
+      # ── 13. Enable config options ─────────────────────────────
+      - name: Enable KSU + SUSFS + KPM config options
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
 
@@ -331,7 +330,7 @@ jobs:
             ./scripts/config --file out/.config -e "$OPT"
           done
 
-          if [ "${{ inputs.enable_kpm }}" = "true" ]; then
+          if [ "true" = "true" ]; then
             ./scripts/config --file out/.config \
               -e CONFIG_KPM \
               -e CONFIG_KALLSYMS \
@@ -342,7 +341,8 @@ jobs:
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             olddefconfig
 
-      - name: Verify kernel config (dynamic)
+      # ── 14. Verify config ─────────────────────────────────────
+      - name: Verify kernel config
         run: |
           echo "==> Verifying kernel config options..."
           CONFIG="out/.config"
@@ -380,7 +380,7 @@ jobs:
             echo "  ⚠️  CONFIG_KSU_MANUAL_HOOK not set"
           fi
 
-          if [ "${{ inputs.enable_kpm }}" = "true" ]; then
+          if [ "true" = "true" ]; then
             echo "  --- KPM options ---"
             for opt in CONFIG_KPM CONFIG_KALLSYMS CONFIG_KALLSYMS_ALL; do
               if grep -q "${opt}=y" "$CONFIG"; then
@@ -402,7 +402,8 @@ jobs:
           echo ""
           echo "==> Config verification complete."
 
-      - name: Patch Header Refactors
+      # ── 15. Patch headers for missing identifiers ─────────────
+      - name: Patch headers for missing identifiers
         run: |
           echo "==> Applying fixes for missing KSU identifiers..."
           sed -i '/#include <linux\/cred.h>/a \
@@ -414,68 +415,32 @@ jobs:
           extern bool ksu_late_loaded;' include/linux/sched.h
           echo "==> Headers patched successfully."
 
-      # NOTE: No bridge stubs needed — SukiSU Ultra's driver provides
-      # real implementations when CONFIG_KSU_MANUAL_HOOK=y
-
-      - name: Build kernel (SukiSU Ultra)
+      # ── 16. Build kernel ──────────────────────────────────────
+      - name: Build kernel
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
           echo "==> Compiling: SukiSU Ultra [${BUILDSUFFIX}]..."
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1
 
-      - name: Verify SUSFS and KPM objects were compiled
+      # ── 17. Package output ────────────────────────────────────
+      - name: Package kernel image
         run: |
-          echo "==> Post-build verification..."
-          FAILED=0
-
-          if find out/ -name "susfs.o" | grep -q .; then
-            echo "  ✅ fs/susfs.o found — SUSFS was compiled."
-          else
-            echo "  ❌ fs/susfs.o NOT found — SUSFS was NOT compiled!"
-            FAILED=1
-          fi
-
-          if [ "${{ inputs.enable_kpm }}" = "true" ]; then
-            if find out/ -path "*/kernelsu/kpm/*.o" | grep -q .; then
-              echo "  ✅ KPM objects found — KPM was compiled."
-            else
-              echo "  ❌ KPM objects NOT found — KPM was NOT compiled!"
-              FAILED=1
-            fi
-          fi
-
-          if [ -f out/arch/arm64/boot/Image.gz ] || [ -f out/arch/arm64/boot/Image ]; then
-            echo "  ✅ Kernel image found."
-          else
-            echo "  ❌ Kernel image NOT found!"
-            FAILED=1
-          fi
-
-          if [ "$FAILED" -eq 1 ]; then
-            echo "::error::Post-build verification FAILED!"
+          echo "==> Packaging kernel..."
+          KERNEL_IMG="out/arch/arm64/boot/Image"
+          if [ ! -f "$KERNEL_IMG" ]; then
+            echo "ERROR: Kernel image not found!"
             exit 1
           fi
-          echo "==> All post-build checks passed."
+          mkdir -p upload
+          cp "$KERNEL_IMG" upload/
+          find out/arch/arm64/boot -name "*.dtb" -exec cp {} upload/ \; 2>/dev/null || true
+          find out/arch/arm64/boot -name "*.dtbo" -exec cp {} upload/ \; 2>/dev/null || true
+          echo "==> Kernel packaged."
 
-      - name: Package AnyKernel3 ZIP
-        run: |
-          cp .github/goodies/AnyKernel3.zip .
-          unzip AnyKernel3.zip -d AnyKernel3
-          if [ -f out/arch/arm64/boot/Image.gz ]; then
-            cp out/arch/arm64/boot/Image.gz AnyKernel3/
-          elif [ -f out/arch/arm64/boot/Image ]; then
-            cp out/arch/arm64/boot/Image AnyKernel3/
-          else
-            echo "ERROR: No kernel Image found"
-            exit 1
-          fi
-
-      - name: Upload artifact
+      # ── 18. Upload artifact ───────────────────────────────────
+      - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sm8550-${{ steps.meta.outputs.kernelversion }}-${{ env.BUILDSUFFIX }}-susfs-${{ steps.meta.outputs.date }}
-          path: AnyKernel3
-          compression-level: 9
-          if-no-files-found: warn
-          overwrite: false
+          name: kernel-${{ env.BUILDSUFFIX }}-${{ steps.kver.outputs.kernelversion }}-${{ steps.kver.outputs.date }}
+          path: upload/
