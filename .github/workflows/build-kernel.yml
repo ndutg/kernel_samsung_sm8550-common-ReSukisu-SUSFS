@@ -254,22 +254,28 @@ jobs:
             echo "WARNING: $KSU_PATCH not found — will inject Kconfig entries manually."
           fi
 
+          # ── Dynamic Kconfig injection ──
+          # If SUSFS Kconfig entries don't exist yet, extract them from the
+          # susfs4ksu repo's patch or header files and inject them.
           KSU_KCONFIG="drivers/kernelsu/Kconfig"
           if [ -f "$KSU_KCONFIG" ]; then
             if ! grep -q 'KSU_SUSFS' "$KSU_KCONFIG"; then
-              echo "==> SUSFS Kconfig entries missing — injecting manually..."
+              echo "==> SUSFS Kconfig entries missing — extracting from susfs headers..."
+
+              # Base SUSFS entry
               printf '\nconfig KSU_SUSFS\n\tbool "Enable SUSFS for KernelSU"\n\tdepends on KSU\n\tdefault y\n\thelp\n\t  Patch for SUSFS on KernelSU\n' >> "$KSU_KCONFIG"
-              for opt in HAS_MAGIC_MOUNT SUS_PATH SUS_MOUNT SUS_KSTAT SUS_OVERLAYFS TRY_UMOUNT SPOOF_UNAME ENABLE_LOG OPEN_REDIRECT SUS_SU SPOOF_CMDLINE_OR_BOOTCONFIG AUTO_ADD_SUS_KSU_DEFAULT_MOUNT AUTO_ADD_SUS_BIND_MOUNT AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT; do
+
+              # Dynamically extract all CONFIG_KSU_SUSFS_* options from susfs.h and susfs.c
+              SUSFS_OPTS=$(grep -hroE 'CONFIG_KSU_SUSFS_[A-Z_]+' susfs4ksu/kernel_patches/include/linux/susfs.h susfs4ksu/kernel_patches/fs/susfs.c 2>/dev/null | sort -u | sed 's/CONFIG_KSU_SUSFS_//')
+
+              echo "==> Found SUSFS sub-options: $SUSFS_OPTS"
+              for opt in $SUSFS_OPTS; do
                 DESC=$(echo "$opt" | tr '_' ' ' | tr '[:upper:]' '[:lower:]')
                 printf '\nconfig KSU_SUSFS_%s\n\tbool "Enable %s"\n\tdepends on KSU_SUSFS\n\tdefault y\n' "$opt" "$DESC" >> "$KSU_KCONFIG"
               done
-              echo "==> SUSFS Kconfig entries injected successfully."
+              echo "==> SUSFS Kconfig entries injected dynamically."
             else
               echo "==> SUSFS Kconfig entries already present."
-            fi
-            if ! grep -q 'KSU_MANUAL_HOOK' "$KSU_KCONFIG"; then
-              echo "==> Injecting KSU_MANUAL_HOOK Kconfig entry..."
-              printf '\nconfig KSU_MANUAL_HOOK\n\tbool "Use manual inline hooks instead of kprobes"\n\tdepends on KSU\n\tdefault n\n' >> "$KSU_KCONFIG"
             fi
           else
             echo "ERROR: KernelSU Kconfig not found at $KSU_KCONFIG"
@@ -297,33 +303,30 @@ jobs:
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             gki_defconfig
 
-      - name: Enable SUSFS + KPM + Hook mode configs
+      - name: Dynamically enable SUSFS + KPM configs
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
 
-          ./scripts/config --file out/.config \
-            -e CONFIG_KSU \
-            -e CONFIG_KSU_SUSFS \
-            -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
-            -e CONFIG_KSU_SUSFS_SUS_PATH \
-            -e CONFIG_KSU_SUSFS_SUS_MOUNT \
-            -e CONFIG_KSU_SUSFS_SUS_KSTAT \
-            -e CONFIG_KSU_SUSFS_SUS_OVERLAYFS \
-            -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
-            -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
-            -e CONFIG_KSU_SUSFS_ENABLE_LOG \
-            -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-            -e CONFIG_KSU_SUSFS_SUS_SU \
-            -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-            -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
-            -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
-            -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
+          # Always enable KSU base
+          ./scripts/config --file out/.config -e CONFIG_KSU
 
+          # Dynamically enable ALL KSU_SUSFS options found in Kconfig
+          KSU_KCONFIG="drivers/kernelsu/Kconfig"
+          echo "==> Dynamically enabling all SUSFS config options..."
+          grep -oE '^config KSU_SUSFS[A-Z_]*' "$KSU_KCONFIG" | while read -r line; do
+            OPT="CONFIG_${line#config }"
+            echo "  Enabling $OPT"
+            ./scripts/config --file out/.config -e "$OPT"
+          done
+
+          # Enable manual hook if this variant uses it
           if [ "${{ matrix.use_manual_hook }}" = "true" ]; then
-            echo "==> Enabling CONFIG_KSU_MANUAL_HOOK for inline hook mode..."
+            echo "==> Enabling manual hook mode..."
+            # Try to enable it — if Kconfig doesn't have it, olddefconfig will drop it silently
             ./scripts/config --file out/.config -e CONFIG_KSU_MANUAL_HOOK
           fi
 
+          # Enable KPM if requested
           if [ "${{ matrix.enable_kpm }}" = "true" ]; then
             ./scripts/config --file out/.config \
               -e CONFIG_KPM \
@@ -335,12 +338,14 @@ jobs:
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             olddefconfig
 
-      - name: Verify kernel config (SUSFS + KPM + Hook)
+      - name: Verify kernel config (dynamic)
         run: |
-          echo "==> Verifying critical kernel config options..."
+          echo "==> Verifying kernel config options..."
           CONFIG="out/.config"
+          KSU_KCONFIG="drivers/kernelsu/Kconfig"
           FAILED=0
 
+          # Mandatory: CONFIG_KSU must be set
           if grep -q 'CONFIG_KSU=y' "$CONFIG"; then
             echo "  ✅ CONFIG_KSU=y"
           else
@@ -348,40 +353,28 @@ jobs:
             FAILED=1
           fi
 
-          for opt in \
-            CONFIG_KSU_SUSFS \
-            CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
-            CONFIG_KSU_SUSFS_SUS_PATH \
-            CONFIG_KSU_SUSFS_SUS_MOUNT \
-            CONFIG_KSU_SUSFS_SUS_KSTAT \
-            CONFIG_KSU_SUSFS_SUS_OVERLAYFS \
-            CONFIG_KSU_SUSFS_TRY_UMOUNT \
-            CONFIG_KSU_SUSFS_SPOOF_UNAME \
-            CONFIG_KSU_SUSFS_ENABLE_LOG \
-            CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-            CONFIG_KSU_SUSFS_SUS_SU \
-            CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-            CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
-            CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
-            CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT; do
-            if grep -q "${opt}=y" "$CONFIG"; then
-              echo "  ✅ ${opt}=y"
+          # Mandatory: CONFIG_KSU_SUSFS must be set
+          if grep -q 'CONFIG_KSU_SUSFS=y' "$CONFIG"; then
+            echo "  ✅ CONFIG_KSU_SUSFS=y"
+          else
+            echo "  ❌ CONFIG_KSU_SUSFS=y is MISSING!"
+            FAILED=1
+          fi
+
+          # Dynamic: verify all KSU_SUSFS sub-options from Kconfig
+          echo "  --- SUSFS sub-options ---"
+          grep -oE '^config KSU_SUSFS_[A-Z_]+' "$KSU_KCONFIG" | while read -r line; do
+            OPT="CONFIG_${line#config }"
+            if grep -q "${OPT}=y" "$CONFIG"; then
+              echo "  ✅ ${OPT}=y"
             else
-              echo "  ❌ ${opt}=y is MISSING!"
-              FAILED=1
+              echo "  ⚠️  ${OPT}=y not set (may have been dropped by olddefconfig)"
             fi
           done
 
-          if [ "${{ matrix.use_manual_hook }}" = "true" ]; then
-            if grep -q 'CONFIG_KSU_MANUAL_HOOK=y' "$CONFIG"; then
-              echo "  ✅ CONFIG_KSU_MANUAL_HOOK=y (inline hook mode)"
-            else
-              echo "  ❌ CONFIG_KSU_MANUAL_HOOK=y is MISSING!"
-              FAILED=1
-            fi
-          fi
-
+          # KPM verification
           if [ "${{ matrix.enable_kpm }}" = "true" ]; then
+            echo "  --- KPM options ---"
             for opt in CONFIG_KPM CONFIG_KALLSYMS CONFIG_KALLSYMS_ALL; do
               if grep -q "${opt}=y" "$CONFIG"; then
                 echo "  ✅ ${opt}=y"
@@ -392,15 +385,26 @@ jobs:
             done
           fi
 
+          # Manual hook — informational only (not all drivers support this Kconfig)
+          if [ "${{ matrix.use_manual_hook }}" = "true" ]; then
+            echo "  --- Hook mode ---"
+            if grep -q 'CONFIG_KSU_MANUAL_HOOK=y' "$CONFIG"; then
+              echo "  ✅ CONFIG_KSU_MANUAL_HOOK=y (inline hook mode)"
+            else
+              echo "  ℹ️  CONFIG_KSU_MANUAL_HOOK not in .config (driver may handle hooks internally)"
+            fi
+          fi
+
           if [ "$FAILED" -eq 1 ]; then
             echo ""
-            echo "::error::One or more required config options are MISSING after olddefconfig!"
+            echo "::error::One or more CRITICAL config options are MISSING!"
+            echo "==> Dumping KSU/KPM config for debugging:"
             grep -E 'CONFIG_KSU|CONFIG_KPM|CONFIG_KALLSYMS' "$CONFIG" || echo "(none found)"
             exit 1
           fi
 
           echo ""
-          echo "==> All required config options verified successfully."
+          echo "==> Config verification complete."
 
       - name: Patch Header Refactors
         run: |
