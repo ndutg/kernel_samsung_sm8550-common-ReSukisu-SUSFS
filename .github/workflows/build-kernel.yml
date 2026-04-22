@@ -1,9 +1,4 @@
-# ============================================================================
-# SM8550 Kernel Matrix Build — KSU-Next / SukiSU Ultra / ReSukiSU
-# + SUSFS + KPM + Manual Hook support
-# ============================================================================
-
-name: Build SM8550 Kernel — KSU Matrix
+name: Build SM8550 Kernel — KSU-Next + ReSukiSU
 
 on:
   workflow_dispatch:
@@ -12,16 +7,12 @@ on:
         description: "Build KernelSU-Next (stable)"
         type: boolean
         default: true
-      build_sukisu:
-        description: "Build SukiSU Ultra (main)"
-        type: boolean
-        default: true
       build_resukisu:
         description: "Build ReSukiSU (main)"
         type: boolean
         default: true
       enable_kpm:
-        description: "Enable KPM — Kernel Patch Manager"
+        description: "Enable KPM — Kernel Patch Manager (ReSukiSU only)"
         type: boolean
         default: true
 
@@ -45,7 +36,6 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
       is_empty: ${{ steps.build-matrix.outputs.is_empty }}
-
     steps:
       - name: Build variant matrix from inputs
         id: build-matrix
@@ -61,18 +51,6 @@ jobs:
               "artifact_prefix": "ksun-stable",
               "enable_kpm": "false",
               "use_manual_hook": "false"
-            }]')
-          fi
-          if [ "${{ inputs.build_sukisu }}" = "true" ]; then
-            VARIANTS=$(echo "$VARIANTS" | jq -c '. += [{
-              "variant": "sukisu-ultra",
-              "display_name": "SukiSU Ultra (main)",
-              "setup_url": "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh",
-              "setup_arg": "main",
-              "ksu_dir": "KernelSU",
-              "artifact_prefix": "sukisu-susfs",
-              "enable_kpm": "${{ inputs.enable_kpm }}",
-              "use_manual_hook": "true"
             }]')
           fi
           if [ "${{ inputs.build_resukisu }}" = "true" ]; then
@@ -92,7 +70,7 @@ jobs:
           if [ "$COUNT" -eq 0 ]; then
             echo "is_empty=true" >> $GITHUB_OUTPUT
             echo 'matrix={"include":[]}' >> $GITHUB_OUTPUT
-            echo "::warning::No variants selected — tick at least one checkbox."
+            echo "::warning::No variants selected."
           else
             echo "is_empty=false" >> $GITHUB_OUTPUT
             MATRIX=$(printf '{"include":%s}' "$VARIANTS" | jq -c .)
@@ -289,8 +267,6 @@ jobs:
             else
               echo "==> SUSFS Kconfig entries already present."
             fi
-
-            # Inject manual hook Kconfig if not present
             if ! grep -q 'KSU_MANUAL_HOOK' "$KSU_KCONFIG"; then
               echo "==> Injecting KSU_MANUAL_HOOK Kconfig entry..."
               printf '\nconfig KSU_MANUAL_HOOK\n\tbool "Use manual inline hooks instead of kprobes"\n\tdepends on KSU\n\tdefault n\n' >> "$KSU_KCONFIG"
@@ -343,7 +319,6 @@ jobs:
             -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
             -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
 
-          # Enable manual hook for variants that need it
           if [ "${{ matrix.use_manual_hook }}" = "true" ]; then
             echo "==> Enabling CONFIG_KSU_MANUAL_HOOK for inline hook mode..."
             ./scripts/config --file out/.config -e CONFIG_KSU_MANUAL_HOOK
