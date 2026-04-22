@@ -161,9 +161,7 @@ jobs:
             fi
           done
 
-      # ── SUSFS patches FIRST (before hook replacement) ──────────────────────
-      # Must apply BEFORE removing KSU-Next hooks because the SUSFS patch
-      # expects the original kernel source layout for fs/read_write.c
+      # ── STEP A: SUSFS patches FIRST (needs original source layout) ─────────
       - name: Apply SUSFS patches
         run: |
           git clone --depth 1 \
@@ -223,50 +221,58 @@ jobs:
 
           rm -rf susfs4ksu
 
-      # ── Hook replacement SECOND (after SUSFS patches) ──────────────────────
-      # Now safe to modify the hook call sites since SUSFS has already patched
-      - name: Replace KSU-Next hooks with SukiSU Ultra manual hooks
+      # ── STEP B: Remove KSU-Next hooks SECOND (after SUSFS is applied) ──────
+      # Only remove function names that are EXCLUSIVE to KSU-Next.
+      # Do NOT touch functions that also exist in SukiSU Ultra's patch.
+      #
+      # KSU-Next ONLY (safe to remove):
+      #   ksu_execveat_hook, ksu_handle_execveat, ksu_handle_execveat_sucompat,
+      #   ksu_handle_vfs_fstat, ksu_handle_devpts, ksu_init_rc_hook
+      #
+      # SHARED names (do NOT remove — SukiSU patch will replace):
+      #   ksu_handle_sys_reboot, ksu_handle_sys_read, ksu_input_hook
+      - name: Remove KSU-Next exclusive hooks
         run: |
-          echo "==> Step 1: Removing existing KSU-Next inline hooks..."
+          echo "==> Removing KSU-Next exclusive inline hooks..."
+
+          # Only target KSU-Next exclusive function names
+          KSUNEXT_ONLY_PATTERNS=(
+            "ksu_execveat_hook"
+            "ksu_handle_execveat_sucompat"
+            "ksu_handle_execveat"
+            "ksu_handle_vfs_fstat"
+            "ksu_handle_devpts"
+            "ksu_init_rc_hook"
+          )
 
           HOOK_FILES=(
-            "drivers/input/input.c"
             "fs/exec.c"
             "fs/read_write.c"
             "fs/stat.c"
-            "kernel/reboot.c"
             "fs/devpts/inode.c"
           )
 
           for file in "${HOOK_FILES[@]}"; do
             if [ -f "$file" ]; then
-              echo "  Cleaning: $file"
-              # Remove extern declarations for KSU-Next hook functions
-              sed -i '/extern.*ksu_handle_/d' "$file"
-              sed -i '/extern.*ksu_execveat_hook/d' "$file"
-              sed -i '/extern.*ksu_input_hook/d' "$file"
-              sed -i '/extern.*ksu_init_rc_hook/d' "$file"
-              sed -i '/extern.*ksu_handle_devpts/d' "$file"
-              sed -i '/extern.*ksu_handle_vfs_fstat/d' "$file"
-
-              # Remove function calls (single line patterns)
-              sed -i '/ksu_handle_sys_reboot\s*()/d' "$file"
-              sed -i '/ksu_handle_sys_read\s*(/d' "$file"
-              sed -i '/ksu_handle_vfs_fstat\s*(/d' "$file"
-              sed -i '/ksu_handle_devpts\s*(/d' "$file"
-              sed -i '/ksu_input_hook\s*(/d' "$file"
-              sed -i '/ksu_execveat_hook\s*(/d' "$file"
-              sed -i '/ksu_handle_execveat_sucompat\s*(/d' "$file"
-              sed -i '/ksu_handle_execveat\s*(/d' "$file"
-              sed -i '/ksu_init_rc_hook\s*(/d' "$file"
-
-              # Remove empty #ifdef CONFIG_KSU blocks left behind
+              echo "  Cleaning KSU-Next hooks from: $file"
+              for pattern in "${KSUNEXT_ONLY_PATTERNS[@]}"; do
+                # Remove extern declarations containing this pattern
+                sed -i "/extern.*${pattern}/d" "$file"
+                # Remove function call lines containing this pattern
+                sed -i "/${pattern}\s*(/d" "$file"
+              done
+              # Clean up empty #ifdef CONFIG_KSU blocks left behind
               perl -0777 -i -pe 's/#ifdef\s+CONFIG_KSU\s*\n(\s*\n)*#endif\s*\n//g' "$file"
               perl -0777 -i -pe 's/#if\s+defined\(CONFIG_KSU\)\s*\n(\s*\n)*#endif\s*\n//g' "$file"
             fi
           done
 
-          echo "==> Step 2: Downloading SukiSU Ultra official manual hooks patch..."
+          echo "==> KSU-Next exclusive hooks removed."
+
+      # ── STEP C: Apply SukiSU Ultra official manual hooks patch ─────────────
+      - name: Apply SukiSU Ultra manual hooks patch
+        run: |
+          echo "==> Downloading SukiSU Ultra official manual hooks patch..."
           git clone --depth 1 "${{ env.SUKISU_PATCH_REPO }}" sukisu_patch \
             || { echo "ERROR: SukiSU_patch clone failed."; exit 1; }
 
@@ -277,7 +283,7 @@ jobs:
             exit 1
           fi
 
-          echo "==> Step 3: Applying SukiSU Ultra manual hooks patch..."
+          echo "==> Applying SukiSU Ultra manual hooks patch..."
           if patch -p1 --forward --fuzz=3 < "$PATCH_FILE"; then
             echo "==> SukiSU Ultra manual hooks patch applied successfully."
           else
@@ -289,7 +295,6 @@ jobs:
           fi
 
           rm -rf sukisu_patch
-
           echo "==> SukiSU Ultra hook replacement complete."
 
       - name: Resolve kernel version and date
@@ -316,11 +321,8 @@ jobs:
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
 
           ./scripts/config --file out/.config -e CONFIG_KSU
-
-          # Enable manual hook mode
           ./scripts/config --file out/.config -e CONFIG_KSU_MANUAL_HOOK
 
-          # Dynamically enable ALL KSU_SUSFS options found in Kconfig
           KSU_KCONFIG="drivers/kernelsu/Kconfig"
           echo "==> Dynamically enabling all SUSFS config options..."
           grep -oE '^config KSU_SUSFS[A-Z_]*' "$KSU_KCONFIG" | while read -r line; do
@@ -375,7 +377,7 @@ jobs:
           if grep -q 'CONFIG_KSU_MANUAL_HOOK=y' "$CONFIG"; then
             echo "  ✅ CONFIG_KSU_MANUAL_HOOK=y (inline hook mode)"
           else
-            echo "  ⚠️  CONFIG_KSU_MANUAL_HOOK not set — SukiSU Ultra may use kprobes fallback"
+            echo "  ⚠️  CONFIG_KSU_MANUAL_HOOK not set"
           fi
 
           if [ "${{ inputs.enable_kpm }}" = "true" ]; then
