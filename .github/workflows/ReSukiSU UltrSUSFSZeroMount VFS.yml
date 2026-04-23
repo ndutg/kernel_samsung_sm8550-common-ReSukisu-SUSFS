@@ -237,17 +237,18 @@ jobs:
           fi
 
           # ── [3/3] Apply 60_ ZeroMount VFS ──
+          # Applied with --fuzz=3 directly. The 51_ enhanced SUSFS
+          # modifies the #include block in fs/statfs.c, so 60_ hunk #1
+          # needs fuzz=2 to match. Trying fuzz=0 first would partially
+          # apply (most files succeed, statfs.c fails), then the fuzz=3
+          # retry sees "already applied" and cascades into failure.
+          # Safe: only the statfs.c #include line needs fuzz.
           echo ""
-          echo "==> [3/3] Applying 60_ ZeroMount VFS kernel patch..."
-          if patch -p1 --forward --fuzz=0 < "$PATCH_60"; then
-            echo "==> 60_ applied cleanly (fuzz=0). ✅"
-          else
-            echo "==> 60_ failed with fuzz=0, retrying with fuzz=3..."
-            patch -p1 --forward --fuzz=3 < "$PATCH_60" \
-              || { echo "ERROR: 60_ ZeroMount patch failed completely."; exit 1; }
-            echo "==> 60_ applied with fuzz=3. ⚠️ Check hunks above."
-          fi
-
+          echo "==> [3/3] Applying 60_ ZeroMount VFS kernel patch (fuzz=3)..."
+          patch -p1 --forward --fuzz=3 < "$PATCH_60" \
+            || { echo "ERROR: 60_ ZeroMount patch failed completely."; exit 1; }
+          echo "==> 60_ applied. ✅"
+          echo "    (fuzz=3 used for statfs.c #include compatibility with 51_)"
           # ── Try KSU driver SUSFS integration patch ──
           # Clone susfs4ksu NOW (after patches) for Kconfig + 10_ patch only
           echo ""
