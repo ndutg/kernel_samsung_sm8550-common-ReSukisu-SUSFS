@@ -1,40 +1,56 @@
 # ============================================================
-# build-kernel-sukisu-v5.yml
-# SukiSU Ultra + SUSFS + Manual Hooks + KPM
+# build-kernel-zeromount-exp.yml
+# [EXPERIMENTAL] ReSukiSU Ultra + SUSFS + ZeroMount VFS
 # SM8550 Samsung Galaxy S23 (android13-5.15)
 #
-# v5 FIX: Use clean upstream kernel source (samsung-sm8550)
-#   instead of ndutg fork (which has pre-baked KSU-Next hooks).
-#   The SukiSU patch targets clean source — no sed needed.
+# This is an experimental build to test ZeroMount VFS kernel
+# driver integration. The ZeroMount patch hooks into the VFS
+# getname() path for mountless module loading.
+#
+# Base: working build-kernel-final.yml (ReSukiSU variant)
+# Added: ZeroMount VFS patch from Enginex0/Super-Builders
+#
+# KNOWN RISKS:
+#   - ZeroMount patch targets stock GKI, not Samsung OEM kernel
+#   - May conflict with Samsung VFS modifications
+#   - If 60_zeromount depends on 51_enhanced_susfs symbols,
+#     build will fail (add 51_ patch in next iteration)
 # ============================================================
 
-name: Build Kernel – SukiSU Ultra
+name: "[EXP] Build SM8550 Kernel — ReSukiSU + SUSFS + ZeroMount"
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+  actions: write
+  packages: write
+
 env:
-  KERNEL_REPO: samsung-sm8550/kernel_samsung_sm8550-common
   KERNEL_BRANCH: android13-5.15
   SUSFS_REPO: https://gitlab.com/simonpunk/susfs4ksu.git
   SUSFS_BRANCH: gki-android13-5.15
   CLANG_VERSION: r584948
-  SUKISU_PATCH_REPO: https://github.com/SukiSU-Ultra/SukiSU_patch.git
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ZEROMOUNT_REPO: https://github.com/Enginex0/Super-Builders.git
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+
   build:
-    name: SukiSU Ultra (manual-hook)
-    runs-on: ubuntu-latest
+    name: "ReSukiSU + SUSFS + ZeroMount (experimental)"
+    runs-on: ubuntu-24.04
 
     steps:
-      # ── 1. Checkout CLEAN kernel source (no pre-baked hooks) ──
+
+      # ── 1. Checkout kernel source ───────────────────────────────
       - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.KERNEL_REPO }}
+          repository: ndutg/kernel_samsung_sm8550-common-ksususfs
           ref: ${{ env.KERNEL_BRANCH }}
           fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # ── 2. Install build dependencies ─────────────────────────
       - name: Install build dependencies
@@ -49,7 +65,7 @@ jobs:
             python3 python-is-python3 tar perl lz4 jq
 
       # ── 3. Restore clang toolchain cache ──────────────────────
-      - name: Restore clang toolchain
+      - name: Restore Clang ${{ env.CLANG_VERSION }} from cache
         uses: actions/cache/restore@v4
         with:
           path: clang-toolchain
@@ -57,17 +73,18 @@ jobs:
           fail-on-cache-miss: true
 
       # ── 4. Verify clang ───────────────────────────────────────
-      - name: Verify clang
+      - name: Verify Clang
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
           clang --version || { echo "ERROR: clang not found."; exit 1; }
 
-      # ── 5. Set up SukiSU Ultra ────────────────────────────────
-      - name: Set up SukiSU Ultra
+      # ── 5. Set up ReSukiSU Ultra ─────────────────────────────
+      - name: Setup ReSukiSU Ultra
+        id: ksu
         run: |
-          echo "==> Setting up SukiSU Ultra..."
+          echo "==> Setting up ReSukiSU Ultra..."
           curl -sSfL --retry 3 --connect-timeout 20 \
-            "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" \
+            "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
             | bash -s "main" \
             || { echo "ERROR: setup.sh failed."; exit 1; }
 
@@ -77,18 +94,13 @@ jobs:
                2>/dev/null | head -1 \
             || echo "main")
 
-          KPM_SUFFIX=""
-          if [ "true" = "true" ]; then
-            KPM_SUFFIX="-kpm"
-          fi
-
-          BUILD_SUFFIX="sukisu-ultra-${KSU_TAG}-manual-hook${KPM_SUFFIX}"
+          BUILD_SUFFIX="resukisu-zeromount-exp-${KSU_TAG}-manual-hook-kpm"
 
           echo "KSUDIR=${KSU_DIR}"           >> $GITHUB_ENV
           echo "BUILDSUFFIX=${BUILD_SUFFIX}" >> $GITHUB_ENV
 
-      # ── 6. Fix KPM header and declarations ────────────────────
-      - name: Fix KPM header and declarations
+      # ── 6. KPM uapi headers + Dynamic Header Fixes ──────────
+      - name: KPM uapi headers + Dynamic Header Fixes
         run: |
           echo "==> Locating kpm.h..."
           KPM_H_PATH=$(find "$KSUDIR" -name "kpm.h" | head -n 1)
@@ -134,7 +146,7 @@ jobs:
             fi
           done
 
-      # ── 7. Apply SUSFS patches ────────────────────────────────
+      # ── 7. Apply SUSFS patches ───────────────────────────────
       - name: Apply SUSFS patches
         run: |
           git clone --depth 1 \
@@ -148,7 +160,7 @@ jobs:
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
 
           patch -p1 --forward \
-            < "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch" \
+            < "susfs4ksu/kernel_patches/50_add_susfs_in_${{ env.SUSFS_BRANCH }}.patch" \
             || { echo "ERROR: SUSFS kernel patch failed."; exit 1; }
 
           KSU_PATCH="susfs4ksu/kernel_patches/10_enable_susfs_for_ksu.patch"
@@ -165,7 +177,7 @@ jobs:
             echo "WARNING: $KSU_PATCH not found — will inject Kconfig entries manually."
           fi
 
-          # Dynamic Kconfig injection
+          # ── Dynamic Kconfig injection ──
           KSU_KCONFIG="drivers/kernelsu/Kconfig"
           if [ -f "$KSU_KCONFIG" ]; then
             if ! grep -q 'KSU_SUSFS' "$KSU_KCONFIG"; then
@@ -181,11 +193,6 @@ jobs:
             else
               echo "==> SUSFS Kconfig entries already present."
             fi
-
-            if ! grep -q 'KSU_MANUAL_HOOK' "$KSU_KCONFIG"; then
-              echo "==> Injecting KSU_MANUAL_HOOK Kconfig entry..."
-              printf '\nconfig KSU_MANUAL_HOOK\n\tbool "Use manual inline hooks instead of kprobes"\n\tdepends on KSU\n\tdefault y\n' >> "$KSU_KCONFIG"
-            fi
           else
             echo "ERROR: KernelSU Kconfig not found at $KSU_KCONFIG"
             exit 1
@@ -194,54 +201,118 @@ jobs:
           rm -rf susfs4ksu
 
       # ════════════════════════════════════════════════════════════
-      # ── 8. Apply SukiSU Ultra manual hooks patch ─────────────
+      # ── 8. ZEROMOUNT VFS PATCH ── ★ EXPERIMENTAL ★
       #
-      #   v5: No sed cleanup needed! The clean upstream source has
-      #   NO pre-baked KSU-Next hooks, so the SukiSU patch applies
-      #   directly to unmodified files.
+      #   Applies the ZeroMount VFS kernel driver patch from
+      #   Enginex0/Super-Builders. This hooks into getname()
+      #   at the VFS layer for mountless module loading.
+      #
+      #   Must be applied AFTER SUSFS (patches may touch
+      #   overlapping files). Order matches Super-Builders:
+      #   50_susfs -> 60_zeromount
+      #
+      #   RISK: Patch targets stock GKI. Samsung OEM kernel
+      #   may have VFS modifications that cause conflicts.
       # ════════════════════════════════════════════════════════════
-      - name: Apply SukiSU Ultra manual hooks patch
+      - name: Apply ZeroMount VFS kernel patch (experimental)
         run: |
-          echo "==> Downloading SukiSU Ultra official manual hooks patch..."
-          git clone --depth 1 "${{ env.SUKISU_PATCH_REPO }}" sukisu_patch \
-            || { echo "ERROR: SukiSU_patch clone failed."; exit 1; }
+          echo "==> Cloning Super-Builders for ZeroMount patch..."
+          git clone --depth 1 "${{ env.ZEROMOUNT_REPO }}" super-builders \
+            || { echo "ERROR: Super-Builders clone failed."; exit 1; }
 
-          PATCH_FILE="sukisu_patch/hooks/scope_min_manual_hooks_v1.6.patch"
-          if [ ! -f "$PATCH_FILE" ]; then
-            echo "ERROR: scope_min_manual_hooks_v1.6.patch not found!"
-            ls -la sukisu_patch/hooks/ || true
+          # Locate the ZeroMount patch dynamically
+          echo "==> Searching for ZeroMount patch..."
+          ZM_PATCH=$(find super-builders -name "60_zeromount*.patch" -path "*/android13-5.15/*" | head -n 1)
+
+          if [ -z "$ZM_PATCH" ]; then
+            echo "ERROR: ZeroMount patch not found in Super-Builders!"
+            echo "==> Available patches:"
+            find super-builders -name "*.patch" | sort
             exit 1
           fi
 
-          echo "==> Applying SukiSU Ultra manual hooks patch..."
-          if patch -p1 --forward --fuzz=3 < "$PATCH_FILE"; then
-            echo "==> SukiSU Ultra manual hooks patch applied successfully."
+          echo "==> Found ZeroMount patch: $ZM_PATCH"
+          echo "==> Patch file content summary:"
+          head -50 "$ZM_PATCH"
+          echo ""
+          echo "==> Files modified by this patch:"
+          grep "^diff --git" "$ZM_PATCH" || true
+          echo ""
+
+          # Also check if Super-Builders has an enhanced SUSFS patch
+          # that ZeroMount might depend on
+          ENH_SUSFS=$(find super-builders -name "51_enhanced_susfs*.patch" -path "*/android13-5.15/*" | head -n 1)
+          if [ -n "$ENH_SUSFS" ]; then
+            echo "==> Found enhanced SUSFS patch: $ENH_SUSFS"
+            echo "==> Applying enhanced SUSFS patch first (ZeroMount may depend on it)..."
+            echo "==> Files modified by enhanced SUSFS patch:"
+            grep "^diff --git" "$ENH_SUSFS" || true
+            if patch -p1 --forward --dry-run < "$ENH_SUSFS" >/dev/null 2>&1; then
+              patch -p1 --forward < "$ENH_SUSFS" \
+                || echo "WARNING: Enhanced SUSFS patch had issues — continuing anyway."
+              echo "==> Enhanced SUSFS patch applied."
+            else
+              echo "==> Enhanced SUSFS patch conflicts with existing SUSFS — skipping."
+              echo "    (If ZeroMount fails to compile, this is likely why.)"
+            fi
           else
-            echo "==> Patch had conflicts — attempting with --force..."
-            patch -p1 --forward --fuzz=3 --force < "$PATCH_FILE" \
-              || { echo "ERROR: SukiSU Ultra manual hooks patch failed completely."; exit 1; }
-            echo "==> Patch applied with --force (check for .rej files)."
-            find . -name "*.rej" -exec echo "  REJECT: {}" \; -exec cat {} \;
+            echo "==> No enhanced SUSFS patch found — proceeding with standard SUSFS."
           fi
 
-          rm -rf sukisu_patch
-          echo "==> SukiSU Ultra hook replacement complete."
+          # Apply ZeroMount VFS patch
+          echo "==> Applying ZeroMount VFS kernel patch..."
+          if patch -p1 --forward --fuzz=3 < "$ZM_PATCH"; then
+            echo "==> ZeroMount VFS patch applied successfully."
+          else
+            echo "==> ZeroMount patch had conflicts!"
+            echo "==> Listing rejected hunks:"
+            find . -name "*.rej" -exec echo "  REJECT: {}" \; -exec cat {} \;
+            echo ""
+            echo "::error::ZeroMount VFS patch failed to apply cleanly."
+            echo "This likely means the Samsung OEM kernel has VFS modifications"
+            echo "that are incompatible with the stock GKI-targeted patch."
+            exit 1
+          fi
 
-      # ── 9. Extract kernel version ─────────────────────────────
-      - name: Extract kernel version
-        id: kver
+          # Dynamically detect ZeroMount Kconfig options from the patch
+          echo "==> Checking for ZeroMount Kconfig requirements..."
+          ZM_CONFIGS=$(grep -hroE 'CONFIG_[A-Z_]*ZEROMOUNT[A-Z_]*' "$ZM_PATCH" 2>/dev/null | sort -u || true)
+          if [ -n "$ZM_CONFIGS" ]; then
+            echo "==> Found ZeroMount config options in patch: $ZM_CONFIGS"
+          else
+            echo "==> No CONFIG_*ZEROMOUNT* entries found in patch."
+            echo "    ZeroMount may use a different config name or be always-on."
+          fi
+
+          # Also check if the patch adds its own Kconfig file
+          ZM_KCONFIG=$(find . -path "*/zeromount/Kconfig" -o -path "*/zeromount*/Kconfig" 2>/dev/null | head -n 1)
+          if [ -n "$ZM_KCONFIG" ]; then
+            echo "==> ZeroMount Kconfig found at: $ZM_KCONFIG"
+            cat "$ZM_KCONFIG"
+          fi
+
+          # Check if the patch added any new source files
+          echo "==> Checking for new ZeroMount source files..."
+          find . -name "*zeromount*" -o -name "*zero_mount*" | grep -v super-builders | grep -v ".patch" || echo "  (none found — patch modifies existing files only)"
+
+          rm -rf super-builders
+          echo "==> ZeroMount integration complete."
+
+      # ── 9. Resolve kernel version and date ───────────────────
+      - name: Resolve kernel version and date
+        id: meta
         run: |
           KVER=$(make kernelversion 2>/dev/null | awk -F. '{print $1"."$2"."$3}')
           echo "kernelversion=${KVER}" >> $GITHUB_OUTPUT
           echo "date=$(date +%Y%m%d)"  >> $GITHUB_OUTPUT
 
-      # ── 10. Set swap space ────────────────────────────────────
-      - name: Set swap space
+      # ── 10. Set up swap (24 GB) ─────────────────────────────
+      - name: Set up swap (24 GB)
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 24
 
-      # ── 11. Generate defconfig ────────────────────────────────
+      # ── 11. Generate defconfig ───────────────────────────────
       - name: Generate defconfig
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
@@ -249,14 +320,16 @@ jobs:
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             gki_defconfig
 
-      # ── 12. Enable config options ─────────────────────────────
-      - name: Enable KSU + SUSFS + KPM config options
+      # ── 12. Enable SUSFS + KPM + ZeroMount configs ──────────
+      - name: Dynamically enable SUSFS + KPM + ZeroMount configs
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
 
+          # Always enable KSU base + manual hook
           ./scripts/config --file out/.config -e CONFIG_KSU
           ./scripts/config --file out/.config -e CONFIG_KSU_MANUAL_HOOK
 
+          # Dynamically enable ALL KSU_SUSFS options found in Kconfig
           KSU_KCONFIG="drivers/kernelsu/Kconfig"
           echo "==> Dynamically enabling all SUSFS config options..."
           grep -oE '^config KSU_SUSFS[A-Z_]*' "$KSU_KCONFIG" | while read -r line; do
@@ -265,25 +338,52 @@ jobs:
             ./scripts/config --file out/.config -e "$OPT"
           done
 
-          if [ "true" = "true" ]; then
-            ./scripts/config --file out/.config \
-              -e CONFIG_KPM \
-              -e CONFIG_KALLSYMS \
-              -e CONFIG_KALLSYMS_ALL
+          # Enable KPM
+          echo "==> Enabling KPM options..."
+          ./scripts/config --file out/.config \
+            -e CONFIG_KPM \
+            -e CONFIG_KALLSYMS \
+            -e CONFIG_KALLSYMS_ALL
+
+          # Try to enable ZeroMount if Kconfig entry exists
+          echo "==> Attempting to enable ZeroMount config options..."
+          for zm_opt in CONFIG_ZEROMOUNT CONFIG_KSU_ZEROMOUNT CONFIG_ZERO_MOUNT; do
+            if grep -rq "${zm_opt#CONFIG_}" drivers/kernelsu/Kconfig fs/Kconfig 2>/dev/null; then
+              echo "  Found ${zm_opt} in Kconfig — enabling."
+              ./scripts/config --file out/.config -e "$zm_opt"
+            else
+              echo "  ${zm_opt} not found in Kconfig — skipping."
+            fi
+          done
+
+          # Also scan for any CONFIG_ options the ZeroMount patch added
+          echo "==> Scanning all Kconfig files for zeromount-related options..."
+          ZM_OPTS=$(grep -rhoE '^config [A-Z_]*[Zz][Ee][Rr][Oo][Mm][Oo][Uu][Nn][Tt][A-Z_]*' drivers/ fs/ kernel/ 2>/dev/null | sort -u || true)
+          if [ -n "$ZM_OPTS" ]; then
+            echo "==> Found zeromount Kconfig entries:"
+            echo "$ZM_OPTS" | while read -r line; do
+              OPT="CONFIG_${line#config }"
+              echo "  Enabling $OPT"
+              ./scripts/config --file out/.config -e "$OPT"
+            done
+          else
+            echo "  No zeromount-specific Kconfig entries found."
+            echo "  ZeroMount may compile unconditionally or use an existing config gate."
           fi
 
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             olddefconfig
 
-      # ── 13. Verify config ─────────────────────────────────────
-      - name: Verify kernel config
+      # ── 13. Verify kernel config (dynamic) ───────────────────
+      - name: Verify kernel config (dynamic)
         run: |
           echo "==> Verifying kernel config options..."
           CONFIG="out/.config"
           KSU_KCONFIG="drivers/kernelsu/Kconfig"
           FAILED=0
 
+          # Mandatory: CONFIG_KSU
           if grep -q 'CONFIG_KSU=y' "$CONFIG"; then
             echo "  ✅ CONFIG_KSU=y"
           else
@@ -291,6 +391,7 @@ jobs:
             FAILED=1
           fi
 
+          # Mandatory: CONFIG_KSU_SUSFS
           if grep -q 'CONFIG_KSU_SUSFS=y' "$CONFIG"; then
             echo "  ✅ CONFIG_KSU_SUSFS=y"
           else
@@ -298,6 +399,7 @@ jobs:
             FAILED=1
           fi
 
+          # Dynamic: verify all KSU_SUSFS sub-options
           echo "  --- SUSFS sub-options ---"
           grep -oE '^config KSU_SUSFS_[A-Z_]+' "$KSU_KCONFIG" | while read -r line; do
             OPT="CONFIG_${line#config }"
@@ -308,28 +410,40 @@ jobs:
             fi
           done
 
+          # Hook mode
           echo "  --- Hook mode ---"
           if grep -q 'CONFIG_KSU_MANUAL_HOOK=y' "$CONFIG"; then
             echo "  ✅ CONFIG_KSU_MANUAL_HOOK=y (inline hook mode)"
           else
-            echo "  ⚠️  CONFIG_KSU_MANUAL_HOOK not set"
+            echo "  ℹ️  CONFIG_KSU_MANUAL_HOOK not in .config (driver may handle hooks internally)"
           fi
 
-          if [ "true" = "true" ]; then
-            echo "  --- KPM options ---"
-            for opt in CONFIG_KPM CONFIG_KALLSYMS CONFIG_KALLSYMS_ALL; do
-              if grep -q "${opt}=y" "$CONFIG"; then
-                echo "  ✅ ${opt}=y"
-              else
-                echo "  ❌ ${opt}=y is MISSING!"
-                FAILED=1
-              fi
-            done
+          # KPM
+          echo "  --- KPM options ---"
+          for opt in CONFIG_KPM CONFIG_KALLSYMS CONFIG_KALLSYMS_ALL; do
+            if grep -q "${opt}=y" "$CONFIG"; then
+              echo "  ✅ ${opt}=y"
+            else
+              echo "  ❌ ${opt}=y is MISSING!"
+              FAILED=1
+            fi
+          done
+
+          # ZeroMount (informational only — not a hard failure)
+          echo "  --- ZeroMount options ---"
+          ZM_IN_CONFIG=$(grep -iE 'zeromount|zero_mount' "$CONFIG" || true)
+          if [ -n "$ZM_IN_CONFIG" ]; then
+            echo "  ✅ ZeroMount config entries found:"
+            echo "$ZM_IN_CONFIG" | while read -r line; do echo "     $line"; done
+          else
+            echo "  ℹ️  No ZeroMount-specific config entries in .config."
+            echo "     ZeroMount VFS driver may compile unconditionally via Makefile."
           fi
 
           if [ "$FAILED" -eq 1 ]; then
             echo ""
             echo "::error::One or more CRITICAL config options are MISSING!"
+            echo "==> Dumping KSU/KPM config for debugging:"
             grep -E 'CONFIG_KSU|CONFIG_KPM|CONFIG_KALLSYMS' "$CONFIG" || echo "(none found)"
             exit 1
           fi
@@ -337,8 +451,8 @@ jobs:
           echo ""
           echo "==> Config verification complete."
 
-      # ── 14. Patch headers for missing identifiers ─────────────
-      - name: Patch headers for missing identifiers
+      # ── 14. Patch Header Refactors ───────────────────────────
+      - name: Patch Header Refactors
         run: |
           echo "==> Applying fixes for missing KSU identifiers..."
           sed -i '/#include <linux\/cred.h>/a \
@@ -350,32 +464,107 @@ jobs:
           extern bool ksu_late_loaded;' include/linux/sched.h
           echo "==> Headers patched successfully."
 
-      # ── 15. Build kernel ──────────────────────────────────────
-      - name: Build kernel
+      # ── 15. Create KSU hook bridge stubs ─────────────────────
+      - name: Create KSU hook bridge stubs
+        run: |
+          echo "==> Creating bridge stubs for pre-baked KSU hooks..."
+          printf '%s\n' \
+            '#include <linux/types.h>' \
+            '#include <linux/fs.h>' \
+            '#include <linux/version.h>' \
+            'int __attribute__((weak)) ksu_handle_sys_reboot(void) { return 0; }' \
+            'int __attribute__((weak)) ksu_handle_sys_read(unsigned int fd, char __user *buf, size_t count) { return 0; }' \
+            'int __attribute__((weak)) ksu_handle_vfs_fstat(int fd, struct kstat *stat) { return 0; }' \
+            'int __attribute__((weak)) ksu_handle_devpts(struct inode *inode) { return 0; }' \
+            'int __attribute__((weak)) ksu_input_hook(void *dev, unsigned int type, unsigned int code, int value) { return 0; }' \
+            'int __attribute__((weak)) ksu_execveat_hook(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }' \
+            'int __attribute__((weak)) ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }' \
+            'int __attribute__((weak)) ksu_handle_execveat_sucompat(int *fd, const char __user **filename_user, void *argv, void *envp, int *flags) { return 0; }' \
+            'int __attribute__((weak)) ksu_init_rc_hook(const char *data, unsigned long count) { return 0; }' \
+            'bool __attribute__((weak)) susfs_is_current_ksu_domain(void) { return true; }' \
+            'unsigned int __attribute__((weak)) susfs_ksu_sid;' \
+            'unsigned int __attribute__((weak)) susfs_priv_app_sid;' \
+            > kernel/ksu_hooks_bridge.c
+
+          if ! grep -q 'ksu_hooks_bridge' kernel/Makefile; then
+            echo 'obj-y += ksu_hooks_bridge.o' >> kernel/Makefile
+          fi
+
+          echo "==> Bridge stubs created."
+          grep 'ksu_hooks_bridge' kernel/Makefile || echo "WARNING: Entry not found!"
+
+      # ── 16. Build kernel ─────────────────────────────────────
+      - name: Build kernel (ReSukiSU + SUSFS + ZeroMount)
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
-          echo "==> Compiling: SukiSU Ultra [${BUILDSUFFIX}]..."
+          echo "==> Compiling: ReSukiSU + SUSFS + ZeroMount [${BUILDSUFFIX}]..."
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1
 
-      # ── 16. Package output ────────────────────────────────────
-      - name: Package kernel image
+      # ── 17. Verify SUSFS, KPM, and ZeroMount objects ────────
+      - name: Verify SUSFS, KPM, and ZeroMount objects
         run: |
-          echo "==> Packaging kernel..."
-          KERNEL_IMG="out/arch/arm64/boot/Image"
-          if [ ! -f "$KERNEL_IMG" ]; then
-            echo "ERROR: Kernel image not found!"
+          echo "==> Post-build verification..."
+          FAILED=0
+
+          if find out/ -name "susfs.o" | grep -q .; then
+            echo "  ✅ fs/susfs.o found — SUSFS was compiled."
+          else
+            echo "  ❌ fs/susfs.o NOT found — SUSFS was NOT compiled!"
+            FAILED=1
+          fi
+
+          if find out/ -path "*/kernelsu/kpm/*.o" | grep -q .; then
+            echo "  ✅ KPM objects found — KPM was compiled."
+          else
+            echo "  ❌ KPM objects NOT found — KPM was NOT compiled!"
+            FAILED=1
+          fi
+
+          # ZeroMount object check (informational — we don't know the exact .o name yet)
+          ZM_OBJ=$(find out/ -iname "*zeromount*" -name "*.o" 2>/dev/null || true)
+          if [ -n "$ZM_OBJ" ]; then
+            echo "  ✅ ZeroMount objects found:"
+            echo "$ZM_OBJ" | while read -r f; do echo "     $f"; done
+          else
+            echo "  ℹ️  No ZeroMount-specific .o files found."
+            echo "     VFS hooks may be compiled into existing objects (e.g., fs/namei.o)."
+          fi
+
+          if [ -f out/arch/arm64/boot/Image.gz ] || [ -f out/arch/arm64/boot/Image ]; then
+            echo "  ✅ Kernel image found."
+          else
+            echo "  ❌ Kernel image NOT found!"
+            FAILED=1
+          fi
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo "::error::Post-build verification FAILED!"
             exit 1
           fi
-          mkdir -p upload
-          cp "$KERNEL_IMG" upload/
-          find out/arch/arm64/boot -name "*.dtb" -exec cp {} upload/ \; 2>/dev/null || true
-          find out/arch/arm64/boot -name "*.dtbo" -exec cp {} upload/ \; 2>/dev/null || true
-          echo "==> Kernel packaged."
 
-      # ── 17. Upload artifact ───────────────────────────────────
-      - name: Upload kernel artifact
+          echo "==> All post-build checks passed."
+
+      # ── 18. Package AnyKernel3 ZIP ───────────────────────────
+      - name: Package AnyKernel3 ZIP
+        run: |
+          cp .github/goodies/AnyKernel3.zip .
+          unzip AnyKernel3.zip -d AnyKernel3
+          if [ -f out/arch/arm64/boot/Image.gz ]; then
+            cp out/arch/arm64/boot/Image.gz AnyKernel3/
+          elif [ -f out/arch/arm64/boot/Image ]; then
+            cp out/arch/arm64/boot/Image AnyKernel3/
+          else
+            echo "ERROR: No kernel Image found"
+            exit 1
+          fi
+
+      # ── 19. Upload artifact ─────────────────────────────────
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ env.BUILDSUFFIX }}-${{ steps.kver.outputs.kernelversion }}-${{ steps.kver.outputs.date }}
-          path: upload/
+          name: sm8550-${{ steps.meta.outputs.kernelversion }}-${{ env.BUILDSUFFIX }}-susfs-zeromount-${{ steps.meta.outputs.date }}
+          path: AnyKernel3
+          compression-level: 9
+          if-no-files-found: warn
+          overwrite: false
