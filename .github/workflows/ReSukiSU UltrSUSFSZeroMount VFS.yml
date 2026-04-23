@@ -1,21 +1,20 @@
 # ============================================================
-# build-kernel-zeromount-exp.yml  (v2)
+# build-kernel-zeromount-exp.yml  (v3 — final attempt)
 # [EXPERIMENTAL] ReSukiSU Ultra + SUSFS + ZeroMount VFS
 # SM8550 Samsung Galaxy S23 (android13-5.15)
 #
-# v2 FIX: Use Super-Builders' complete version-matched patch
-#   chain (50_ + 51_ + 60_) instead of mixing simonpunk's
-#   SUSFS with Super-Builders' ZeroMount. All patches applied
-#   with --fuzz=0 for exact hook placement.
+# v3 FIX: Do NOT pre-copy susfs source files before patches.
+#   Super-Builders 50_ patch CREATES susfs.c, susfs.h, and
+#   susfs_def.h — pre-copying caused "file already exists"
+#   and cascading patch failures.
 #
-# Patch order (from Super-Builders docs):
-#   50_ upstream SUSFS (shared across all variants)
-#   51_ enhanced SUSFS (bug fixes, hardening, guards)
-#   60_ ZeroMount VFS driver (path redirection, injection)
+#   susfs4ksu is now cloned AFTER all patches, only for
+#   Kconfig symbol extraction.
 #
-# v1 bug: Used simonpunk's 50_ which differs from Super-Builders'
-#   pinned version, causing 51_ to conflict and 60_ to apply
-#   with fuzz 3 (risky hook misplacement).
+# Patch chain (all from Super-Builders, version-matched):
+#   50_ upstream SUSFS      (creates susfs files + patches VFS)
+#   51_ enhanced SUSFS      (bug fixes, hardening, guards)
+#   60_ ZeroMount VFS       (path redirection, injection)
 # ============================================================
 
 name: "[EXP] Build SM8550 Kernel — ReSukiSU + SUSFS + ZeroMount"
@@ -39,7 +38,7 @@ env:
 jobs:
 
   build:
-    name: "ReSukiSU + SUSFS + ZeroMount (experimental v2)"
+    name: "ReSukiSU + SUSFS + ZeroMount (experimental v3)"
     runs-on: ubuntu-24.04
 
     steps:
@@ -147,42 +146,27 @@ jobs:
           done
 
       # ════════════════════════════════════════════════════════════
-      # ── 7. UNIFIED PATCH CHAIN  ──  ★ v2 FIX ★
+      # ── 7. UNIFIED PATCH CHAIN ── ★ v3 FIX ★
       #
-      #   Uses Super-Builders' complete version-matched patch
-      #   chain instead of mixing upstream SUSFS with ZeroMount.
+      #   v2 bug: Copied susfs.c/susfs.h/susfs_def.h from
+      #     susfs4ksu BEFORE the 50_ patch, causing "file
+      #     already exists" errors and cascading failures.
       #
-      #   50_ upstream SUSFS          (shared)
-      #   51_ enhanced SUSFS          (shared, bug fixes + hardening)
-      #   60_ ZeroMount VFS driver    (shared)
-      #
-      #   All applied with --fuzz=0 for exact hook placement.
-      #   susfs4ksu still cloned for source files (susfs.c, .h)
+      #   v3 fix: Do NOT pre-copy any files. Let the 50_
+      #     patch create them. Clone susfs4ksu AFTER patches
+      #     for Kconfig extraction only.
       # ════════════════════════════════════════════════════════════
-      - name: Apply SUSFS + ZeroMount unified patch chain (v2)
+      - name: Apply SUSFS + ZeroMount unified patch chain (v3)
         run: |
-          # ── Clone susfs4ksu for source files only ──
-          echo "==> Cloning susfs4ksu for source files..."
-          git clone --depth 1 \
-            "${{ env.SUSFS_REPO }}" \
-            -b "${{ env.SUSFS_BRANCH }}" \
-            susfs4ksu \
-            || { echo "ERROR: SUSFS clone failed."; exit 1; }
-
-          cp susfs4ksu/kernel_patches/fs/susfs.c                fs/
-          cp susfs4ksu/kernel_patches/include/linux/susfs.h     include/linux/
-          cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
-          echo "==> SUSFS source files copied."
-
           # ── Clone Super-Builders for version-matched patches ──
           echo "==> Cloning Super-Builders for version-matched patch chain..."
           git clone --depth 1 "${{ env.ZEROMOUNT_REPO }}" super-builders \
             || { echo "ERROR: Super-Builders clone failed."; exit 1; }
 
-          # ── Locate all three patches ──
+          # ── Locate patch directory ──
           PATCH_DIR=$(find super-builders -type d -path "*/android13-5.15/ReSukiSU/patches" | head -n 1)
           if [ -z "$PATCH_DIR" ]; then
-            echo "WARNING: ReSukiSU patches dir not found, trying WildKSU..."
+            echo "WARNING: ReSukiSU patches dir not found, trying any variant..."
             PATCH_DIR=$(find super-builders -type d -path "*/android13-5.15/*/patches" | head -n 1)
           fi
 
@@ -201,37 +185,46 @@ jobs:
           PATCH_60=$(find "$PATCH_DIR" -name "60_*.patch" | head -n 1)
 
           # ── Validate all three exist ──
-          MISSING=0
-          for p in "$PATCH_50" "$PATCH_51" "$PATCH_60"; do
-            if [ -z "$p" ] || [ ! -f "$p" ]; then
-              echo "ERROR: Required patch missing: $p"
-              MISSING=1
-            fi
-          done
-          if [ "$MISSING" -eq 1 ]; then
-            echo "ERROR: Not all patches found. Available:"
-            find "$PATCH_DIR" -name "*.patch" | sort
-            exit 1
-          fi
-
           echo "==> Patch chain:"
           echo "    50_: $PATCH_50"
           echo "    51_: $PATCH_51"
           echo "    60_: $PATCH_60"
+          for p in "$PATCH_50" "$PATCH_51" "$PATCH_60"; do
+            if [ -z "$p" ] || [ ! -f "$p" ]; then
+              echo "ERROR: Required patch missing!"
+              find "$PATCH_DIR" -name "*.patch" | sort
+              exit 1
+            fi
+          done
 
-          # ── Apply 50_ upstream SUSFS ──
+          # ── [1/3] Apply 50_ upstream SUSFS ──
+          # This patch CREATES susfs.c, susfs.h, susfs_def.h
+          # Do NOT pre-copy those files!
           echo ""
           echo "==> [1/3] Applying 50_ upstream SUSFS patch..."
+          echo "    (This patch creates susfs source files + patches kernel VFS)"
           if patch -p1 --forward --fuzz=0 < "$PATCH_50"; then
             echo "==> 50_ applied cleanly (fuzz=0). ✅"
           else
             echo "==> 50_ failed with fuzz=0, retrying with fuzz=3..."
+            # Reset any partial application
+            patch -p1 --reverse --fuzz=0 < "$PATCH_50" 2>/dev/null || true
             patch -p1 --forward --fuzz=3 < "$PATCH_50" \
               || { echo "ERROR: 50_ SUSFS patch failed completely."; exit 1; }
             echo "==> 50_ applied with fuzz=3. ⚠️ Check hunks above."
           fi
 
-          # ── Apply 51_ enhanced SUSFS ──
+          # Verify susfs files were created by the patch
+          for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
+            if [ -f "$f" ]; then
+              echo "    ✅ $f created by patch"
+            else
+              echo "    ❌ $f NOT created! Patch may be incomplete."
+              exit 1
+            fi
+          done
+
+          # ── [2/3] Apply 51_ enhanced SUSFS ──
           echo ""
           echo "==> [2/3] Applying 51_ enhanced SUSFS patch..."
           if patch -p1 --forward --fuzz=0 < "$PATCH_51"; then
@@ -243,7 +236,7 @@ jobs:
             echo "==> 51_ applied with fuzz=3. ⚠️ Check hunks above."
           fi
 
-          # ── Apply 60_ ZeroMount VFS ──
+          # ── [3/3] Apply 60_ ZeroMount VFS ──
           echo ""
           echo "==> [3/3] Applying 60_ ZeroMount VFS kernel patch..."
           if patch -p1 --forward --fuzz=0 < "$PATCH_60"; then
@@ -255,10 +248,18 @@ jobs:
             echo "==> 60_ applied with fuzz=3. ⚠️ Check hunks above."
           fi
 
-          # ── Try KSU driver SUSFS integration patch from susfs4ksu ──
+          # ── Try KSU driver SUSFS integration patch ──
+          # Clone susfs4ksu NOW (after patches) for Kconfig + 10_ patch only
+          echo ""
+          echo "==> Cloning susfs4ksu for Kconfig extraction..."
+          git clone --depth 1 \
+            "${{ env.SUSFS_REPO }}" \
+            -b "${{ env.SUSFS_BRANCH }}" \
+            susfs4ksu \
+            || { echo "ERROR: susfs4ksu clone failed."; exit 1; }
+
           KSU_PATCH="susfs4ksu/kernel_patches/10_enable_susfs_for_ksu.patch"
           if [ -f "$KSU_PATCH" ]; then
-            echo ""
             echo "==> Attempting KSU driver SUSFS integration patch..."
             if patch -p1 --forward --dry-run < "$KSU_PATCH" >/dev/null 2>&1; then
               patch -p1 --forward < "$KSU_PATCH" \
@@ -286,17 +287,17 @@ jobs:
             fi
           fi
 
-          # ── Report patch results ──
+          # ── Report results ──
           echo ""
           echo "==> Checking for new ZeroMount source files..."
           find . -name "*zeromount*" -o -name "*zero_mount*" | grep -v super-builders | grep -v ".patch" || echo "  (none)"
 
           echo ""
           echo "==> Checking for .rej files (patch rejects)..."
-          REJ_COUNT=$(find . -name "*.rej" | wc -l)
+          REJ_COUNT=$(find . -name "*.rej" -not -path "*/super-builders/*" -not -path "*/susfs4ksu/*" | wc -l)
           if [ "$REJ_COUNT" -gt 0 ]; then
             echo "  ❌ Found $REJ_COUNT reject files:"
-            find . -name "*.rej" -exec echo "  REJECT: {}" \; -exec cat {} \;
+            find . -name "*.rej" -not -path "*/super-builders/*" -not -path "*/susfs4ksu/*" -exec echo "  REJECT: {}" \; -exec cat {} \;
             echo "::warning::Patch rejects found — review above."
           else
             echo "  ✅ No reject files — all patches applied cleanly."
@@ -305,13 +306,12 @@ jobs:
           rm -rf susfs4ksu super-builders
           echo "==> Unified patch chain complete."
 
-      # ── 8. Verify patch placement (spot-check) ───────────────
+      # ── 8. Verify patch placement ───────────────────────────
       - name: Verify critical hook placement
         run: |
-          echo "==> Spot-checking ZeroMount hook placement..."
+          echo "==> Verifying ZeroMount hook placement..."
           ISSUES=0
 
-          # Check zeromount.c exists and has content
           if [ -f "fs/zeromount.c" ]; then
             LINES=$(wc -l < fs/zeromount.c)
             echo "  ✅ fs/zeromount.c exists ($LINES lines)"
@@ -320,7 +320,6 @@ jobs:
             ISSUES=1
           fi
 
-          # Check zeromount.h exists
           if [ -f "include/linux/zeromount.h" ]; then
             echo "  ✅ include/linux/zeromount.h exists"
           else
@@ -328,7 +327,6 @@ jobs:
             ISSUES=1
           fi
 
-          # Check fs/Makefile has zeromount entry
           if grep -q "zeromount" fs/Makefile; then
             echo "  ✅ fs/Makefile has zeromount build entry"
           else
@@ -336,14 +334,12 @@ jobs:
             ISSUES=1
           fi
 
-          # Check fs/Kconfig has CONFIG_ZEROMOUNT
           if grep -q "ZEROMOUNT" fs/Kconfig; then
             echo "  ✅ fs/Kconfig has ZEROMOUNT entry"
           else
-            echo "  ⚠️  fs/Kconfig missing ZEROMOUNT (may be in another Kconfig)"
+            echo "  ⚠️  fs/Kconfig missing ZEROMOUNT"
           fi
 
-          # Check zeromount.h is included in patched files
           for f in fs/d_path.c fs/namei.c fs/stat.c fs/readdir.c; do
             if [ -f "$f" ] && grep -q "zeromount.h" "$f"; then
               echo "  ✅ $f includes zeromount.h"
@@ -356,10 +352,9 @@ jobs:
             echo "::error::Critical ZeroMount files missing!"
             exit 1
           fi
-
           echo "==> Hook placement verification passed."
 
-      # ── 9. Resolve kernel version and date ───────────────────
+      # ── 9. Resolve kernel version ───────────────────────────
       - name: Resolve kernel version and date
         id: meta
         run: |
@@ -367,7 +362,7 @@ jobs:
           echo "kernelversion=${KVER}" >> $GITHUB_OUTPUT
           echo "date=$(date +%Y%m%d)"  >> $GITHUB_OUTPUT
 
-      # ── 10. Set up swap (24 GB) ─────────────────────────────
+      # ── 10. Set up swap ──────────────────────────────────────
       - name: Set up swap (24 GB)
         uses: pierotofy/set-swap-space@master
         with:
@@ -381,8 +376,8 @@ jobs:
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             gki_defconfig
 
-      # ── 12. Enable SUSFS + KPM + ZeroMount configs ──────────
-      - name: Dynamically enable SUSFS + KPM + ZeroMount configs
+      # ── 12. Enable configs ───────────────────────────────────
+      - name: Enable SUSFS + KPM + ZeroMount configs
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
 
@@ -410,7 +405,7 @@ jobs:
             CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             olddefconfig
 
-      # ── 13. Verify kernel config ─────────────────────────────
+      # ── 13. Verify config ───────────────────────────────────
       - name: Verify kernel config
         run: |
           echo "==> Verifying kernel config options..."
@@ -442,23 +437,22 @@ jobs:
             grep -E 'CONFIG_KSU|CONFIG_KPM|CONFIG_KALLSYMS|CONFIG_ZEROMOUNT' "$CONFIG" || true
             exit 1
           fi
-
           echo "==> Config verification complete."
 
-      # ── 14. Patch Header Refactors ───────────────────────────
+      # ── 14. Patch headers ────────────────────────────────────
       - name: Patch Header Refactors
         run: |
           echo "==> Applying fixes for missing KSU identifiers..."
-          sed -i '/#include <linux\/cred.h>/a \\
+          sed -i '/#include <linux\/cred.h>/a \
           extern struct cred *ksu_cred;\
           extern bool allow_shell;\
           extern bool ksu_late_loaded;' include/linux/cred.h
 
-          sed -i '/#include <linux\/types.h>/a \\
+          sed -i '/#include <linux\/types.h>/a \
           extern bool ksu_late_loaded;' include/linux/sched.h
           echo "==> Headers patched successfully."
 
-      # ── 15. Create KSU hook bridge stubs ─────────────────────
+      # ── 15. Bridge stubs ─────────────────────────────────────
       - name: Create KSU hook bridge stubs
         run: |
           echo "==> Creating bridge stubs for pre-baked KSU hooks..."
@@ -535,7 +529,7 @@ jobs:
           fi
           echo "==> All post-build checks passed."
 
-      # ── 18. Package AnyKernel3 ZIP ───────────────────────────
+      # ── 18. Package AnyKernel3 ───────────────────────────────
       - name: Package AnyKernel3 ZIP
         run: |
           cp .github/goodies/AnyKernel3.zip .
