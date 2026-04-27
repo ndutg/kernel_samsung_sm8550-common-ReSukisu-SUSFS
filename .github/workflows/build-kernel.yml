@@ -159,7 +159,7 @@ jobs:
           KSU_DIR="${{ matrix.ksu_dir }}"
           KSU_TAG=$(git -C "${KSU_DIR}" describe --tags --abbrev=0 2>/dev/null \
             || git -C "${KSU_DIR}" tag --list 'v[0-9]*' --sort=-v:refname \
-               2>/dev/null | head -1 \
+            2>/dev/null | head -1 \
             || echo "main")
 
           KPM_SUFFIX=""
@@ -176,6 +176,83 @@ jobs:
 
           echo "KSUDIR=${KSU_DIR}"           >> $GITHUB_ENV
           echo "BUILDSUFFIX=${BUILD_SUFFIX}" >> $GITHUB_ENV
+
+      # ════════════════════════════════════════════════════════════
+      # ── NEW: Generate build changelog ──
+      # ════════════════════════════════════════════════════════════
+      - name: Generate build changelog
+        run: |
+          echo "==> Generating build changelog..."
+          CHANGELOG="CHANGELOG.txt"
+
+          DATE=$(date '+%Y-%m-%d %H:%M UTC')
+          VARIANT="${{ matrix.display_name }}"
+          KSUDIR_LOCAL="${{ matrix.ksu_dir }}"
+
+          # ── Kernel source info ──
+          KERNEL_SHA=$(git rev-parse --short HEAD)
+          KERNEL_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "${{ env.KERNEL_BRANCH }}")
+          KERNEL_LOG=$(git log --oneline --date=short --format="  %ad  %h  %s" -15)
+
+          # ── KSU info ──
+          KSU_TAG="unknown"
+          KSU_SHA="unknown"
+          KSU_LOG="  (not available)"
+          if [ -d "${KSUDIR_LOCAL}" ]; then
+            KSU_TAG=$(git -C "${KSUDIR_LOCAL}" describe --tags --abbrev=0 2>/dev/null \
+              || git -C "${KSUDIR_LOCAL}" tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null | head -1 \
+              || echo "main")
+            KSU_SHA=$(git -C "${KSUDIR_LOCAL}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            KSU_LOG=$(git -C "${KSUDIR_LOCAL}" log --oneline --date=short --format="  %ad  %h  %s" -15 2>/dev/null || echo "  (not available)")
+          fi
+
+          # ── Write CHANGELOG.txt ──
+          cat > "$CHANGELOG" << CHLOG
+          =====================================
+            SM8550 KERNEL BUILD CHANGELOG
+          =====================================
+          Build Date:     ${DATE}
+          Variant:        ${VARIANT}
+          Kernel Branch:  ${KERNEL_BRANCH}
+          Kernel Commit:  ${KERNEL_SHA}
+          KSU Version:    ${KSU_TAG}
+          KSU Commit:     ${KSU_SHA}
+          SUSFS Branch:   ${{ env.SUSFS_BRANCH }}
+          =====================================
+
+          ── KERNEL SOURCE (last 15 commits) ──
+          ${KERNEL_LOG}
+
+          ── ${VARIANT} (last 15 commits) ──
+          ${KSU_LOG}
+
+          ── SUSFS ──
+          (appended after SUSFS clone)
+          CHLOG
+
+          # ── Write GitHub Actions Job Summary ──
+          cat >> "$GITHUB_STEP_SUMMARY" << GHSUM
+          ## 🔨 Build: ${VARIANT}
+
+          | Component | Version | Commit |
+          |---|---|---|
+          | **Kernel** | \`${KERNEL_BRANCH}\` | \`${KERNEL_SHA}\` |
+          | **${VARIANT}** | \`${KSU_TAG}\` | \`${KSU_SHA}\` |
+          | **SUSFS** | \`${{ env.SUSFS_BRANCH }}\` | *(see below)* |
+
+          ### 📋 Kernel Source (last 15 commits)
+          \`\`\`
+          ${KERNEL_LOG}
+          \`\`\`
+
+          ### 📋 ${VARIANT} (last 15 commits)
+          \`\`\`
+          ${KSU_LOG}
+          \`\`\`
+          GHSUM
+
+          echo "CHANGELOG_PATH=${CHANGELOG}" >> $GITHUB_ENV
+          echo "==> Changelog generated."
 
       - name: KPM uapi headers + Dynamic Header Fixes
         if: matrix.enable_kpm == 'true'
@@ -255,17 +332,13 @@ jobs:
           fi
 
           # ── Dynamic Kconfig injection ──
-          # If SUSFS Kconfig entries don't exist yet, extract them from the
-          # susfs4ksu repo's patch or header files and inject them.
           KSU_KCONFIG="drivers/kernelsu/Kconfig"
           if [ -f "$KSU_KCONFIG" ]; then
             if ! grep -q 'KSU_SUSFS' "$KSU_KCONFIG"; then
               echo "==> SUSFS Kconfig entries missing — extracting from susfs headers..."
 
-              # Base SUSFS entry
               printf '\nconfig KSU_SUSFS\n\tbool "Enable SUSFS for KernelSU"\n\tdepends on KSU\n\tdefault y\n\thelp\n\t  Patch for SUSFS on KernelSU\n' >> "$KSU_KCONFIG"
 
-              # Dynamically extract all CONFIG_KSU_SUSFS_* options from susfs.h and susfs.c
               SUSFS_OPTS=$(grep -hroE 'CONFIG_KSU_SUSFS_[A-Z_]+' susfs4ksu/kernel_patches/include/linux/susfs.h susfs4ksu/kernel_patches/fs/susfs.c 2>/dev/null | sort -u | sed 's/CONFIG_KSU_SUSFS_//')
 
               echo "==> Found SUSFS sub-options: $SUSFS_OPTS"
@@ -280,6 +353,31 @@ jobs:
           else
             echo "ERROR: KernelSU Kconfig not found at $KSU_KCONFIG"
             exit 1
+          fi
+
+          # ── Append SUSFS changelog ──
+          SUSFS_SHA=$(git -C susfs4ksu rev-parse --short HEAD 2>/dev/null || echo "unknown")
+          SUSFS_LOG=$(git -C susfs4ksu log --oneline --date=short --format="  %ad  %h  %s" -15 2>/dev/null || echo "  (not available)")
+
+          if [ -f "$CHANGELOG_PATH" ]; then
+            cat >> "$CHANGELOG_PATH" << SUSFSLOG
+
+          ── SUSFS (last 15 commits) ──
+          Branch: ${{ env.SUSFS_BRANCH }}
+          Commit: ${SUSFS_SHA}
+          ${SUSFS_LOG}
+          SUSFSLOG
+
+            # Update job summary
+            cat >> "$GITHUB_STEP_SUMMARY" << GHSUSFS
+
+          ### 📋 SUSFS (last 15 commits) — commit \`${SUSFS_SHA}\`
+          \`\`\`
+          ${SUSFS_LOG}
+          \`\`\`
+          GHSUSFS
+
+            echo "==> SUSFS changelog appended."
           fi
 
           rm -rf susfs4ksu
@@ -322,7 +420,6 @@ jobs:
           # Enable manual hook if this variant uses it
           if [ "${{ matrix.use_manual_hook }}" = "true" ]; then
             echo "==> Enabling manual hook mode..."
-            # Try to enable it — if Kconfig doesn't have it, olddefconfig will drop it silently
             ./scripts/config --file out/.config -e CONFIG_KSU_MANUAL_HOOK
           fi
 
@@ -385,7 +482,7 @@ jobs:
             done
           fi
 
-          # Manual hook — informational only (not all drivers support this Kconfig)
+          # Manual hook — informational only
           if [ "${{ matrix.use_manual_hook }}" = "true" ]; then
             echo "  --- Hook mode ---"
             if grep -q 'CONFIG_KSU_MANUAL_HOOK=y' "$CONFIG"; then
@@ -496,6 +593,12 @@ jobs:
           else
             echo "ERROR: No kernel Image found"
             exit 1
+          fi
+
+          # Include changelog in the flashable ZIP
+          if [ -f "$CHANGELOG_PATH" ]; then
+            cp "$CHANGELOG_PATH" AnyKernel3/
+            echo "==> CHANGELOG.txt included in AnyKernel3 package."
           fi
 
       - name: Upload artifact
