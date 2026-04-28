@@ -179,8 +179,6 @@ jobs:
 
       # ════════════════════════════════════════════════════════════
       # ── Smart Build Changelog ──
-      #   Categorises commits, calculates flash priority,
-      #   writes CHANGELOG.txt + GitHub Job Summary
       # ════════════════════════════════════════════════════════════
       - name: Generate build changelog
         run: |
@@ -547,48 +545,53 @@ jobs:
           KSU_KCONFIG="drivers/kernelsu/Kconfig"
           FAILED=0
 
+          # Mandatory: CONFIG_KSU must be set
           if grep -q 'CONFIG_KSU=y' "$CONFIG"; then
-            echo "  CONFIG_KSU=y"
+            echo "  ✅ CONFIG_KSU=y"
           else
-            echo "  CONFIG_KSU=y is MISSING!"
+            echo "  ❌ CONFIG_KSU=y is MISSING!"
             FAILED=1
           fi
 
+          # Mandatory: CONFIG_KSU_SUSFS must be set
           if grep -q 'CONFIG_KSU_SUSFS=y' "$CONFIG"; then
-            echo "  CONFIG_KSU_SUSFS=y"
+            echo "  ✅ CONFIG_KSU_SUSFS=y"
           else
-            echo "  CONFIG_KSU_SUSFS=y is MISSING!"
+            echo "  ❌ CONFIG_KSU_SUSFS=y is MISSING!"
             FAILED=1
           fi
 
+          # Dynamic: verify all KSU_SUSFS sub-options from Kconfig
           echo "  --- SUSFS sub-options ---"
           grep -oE '^config KSU_SUSFS_[A-Z_]+' "$KSU_KCONFIG" | while read -r line; do
             OPT="CONFIG_${line#config }"
             if grep -q "${OPT}=y" "$CONFIG"; then
-              echo "  ${OPT}=y"
+              echo "  ✅ ${OPT}=y"
             else
-              echo "  ${OPT}=y not set (may have been dropped by olddefconfig)"
+              echo "  ⚠️  ${OPT}=y not set (may have been dropped by olddefconfig)"
             fi
           done
 
+          # KPM verification
           if [ "${{ matrix.enable_kpm }}" = "true" ]; then
             echo "  --- KPM options ---"
             for opt in CONFIG_KPM CONFIG_KALLSYMS CONFIG_KALLSYMS_ALL; do
               if grep -q "${opt}=y" "$CONFIG"; then
-                echo "  ${opt}=y"
+                echo "  ✅ ${opt}=y"
               else
-                echo "  ${opt}=y is MISSING!"
+                echo "  ❌ ${opt}=y is MISSING!"
                 FAILED=1
               fi
             done
           fi
 
+          # Manual hook — informational only
           if [ "${{ matrix.use_manual_hook }}" = "true" ]; then
             echo "  --- Hook mode ---"
             if grep -q 'CONFIG_KSU_MANUAL_HOOK=y' "$CONFIG"; then
-              echo "  CONFIG_KSU_MANUAL_HOOK=y (inline hook mode)"
+              echo "  ✅ CONFIG_KSU_MANUAL_HOOK=y (inline hook mode)"
             else
-              echo "  CONFIG_KSU_MANUAL_HOOK not in .config (driver may handle hooks internally)"
+              echo "  ℹ️  CONFIG_KSU_MANUAL_HOOK not in .config (driver may handle hooks internally)"
             fi
           fi
 
@@ -615,6 +618,19 @@ jobs:
           extern bool ksu_late_loaded;' include/linux/sched.h
           echo "==> Headers patched successfully."
 
+      # ════════════════════════════════════════════════════════════
+      # ── KSU hook bridge stubs ──
+      #   Provides weak symbols for pre-baked KSU-Next hooks in
+      #   the ndutg kernel source.
+      #
+      #   FIX: Added DEFINE_STATIC_KEY_FALSE for:
+      #     - ksu_is_init_rc_hook_enabled (referenced in read_write.c)
+      #     - ksu_is_input_hook_enabled   (referenced in input.c)
+      #   KSU-Next uses kprobes so never defines these. ReSukiSU
+      #   defines them internally so the weak versions here are
+      #   only used by the KSU-Next variant. STATIC_KEY_FALSE
+      #   means the branches default to "not taken" = safe no-op.
+      # ════════════════════════════════════════════════════════════
       - name: Create KSU hook bridge stubs
         run: |
           echo "==> Creating bridge stubs for pre-baked KSU hooks..."
@@ -622,6 +638,9 @@ jobs:
             '#include <linux/types.h>' \
             '#include <linux/fs.h>' \
             '#include <linux/version.h>' \
+            '#include <linux/jump_label.h>' \
+            'DEFINE_STATIC_KEY_FALSE(ksu_is_init_rc_hook_enabled);' \
+            'DEFINE_STATIC_KEY_FALSE(ksu_is_input_hook_enabled);' \
             'int __attribute__((weak)) ksu_handle_sys_reboot(void) { return 0; }' \
             'int __attribute__((weak)) ksu_handle_sys_read(unsigned int fd, char __user *buf, size_t count) { return 0; }' \
             'int __attribute__((weak)) ksu_handle_vfs_fstat(int fd, struct kstat *stat) { return 0; }' \
@@ -654,25 +673,25 @@ jobs:
           FAILED=0
 
           if find out/ -name "susfs.o" | grep -q .; then
-            echo "  susfs.o found — SUSFS was compiled."
+            echo "  ✅ fs/susfs.o found — SUSFS was compiled."
           else
-            echo "  susfs.o NOT found — SUSFS was NOT compiled!"
+            echo "  ❌ fs/susfs.o NOT found — SUSFS was NOT compiled!"
             FAILED=1
           fi
 
           if [ "${{ matrix.enable_kpm }}" = "true" ]; then
             if find out/ -path "*/kernelsu/kpm/*.o" | grep -q .; then
-              echo "  KPM objects found — KPM was compiled."
+              echo "  ✅ KPM objects found — KPM was compiled."
             else
-              echo "  KPM objects NOT found — KPM was NOT compiled!"
+              echo "  ❌ KPM objects NOT found — KPM was NOT compiled!"
               FAILED=1
             fi
           fi
 
           if [ -f out/arch/arm64/boot/Image.gz ] || [ -f out/arch/arm64/boot/Image ]; then
-            echo "  Kernel image found."
+            echo "  ✅ Kernel image found."
           else
-            echo "  Kernel image NOT found!"
+            echo "  ❌ Kernel image NOT found!"
             FAILED=1
           fi
 
@@ -702,7 +721,7 @@ jobs:
           fi
 
       # ════════════════════════════════════════════════════════════
-      # ── Print build changelog to Actions log ──
+      # ── Print changelog to build log ──
       # ════════════════════════════════════════════════════════════
       - name: Print build changelog
         run: |
