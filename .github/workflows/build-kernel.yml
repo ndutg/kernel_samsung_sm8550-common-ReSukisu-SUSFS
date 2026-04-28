@@ -178,11 +178,13 @@ jobs:
           echo "BUILDSUFFIX=${BUILD_SUFFIX}" >> $GITHUB_ENV
 
       # ════════════════════════════════════════════════════════════
-      # ── NEW: Generate build changelog ──
+      # ── Smart Build Changelog ──
+      #   Categorises commits, calculates flash priority,
+      #   writes CHANGELOG.txt + GitHub Job Summary
       # ════════════════════════════════════════════════════════════
       - name: Generate build changelog
         run: |
-          echo "==> Generating build changelog..."
+          echo "==> Generating smart build changelog..."
           CHANGELOG="CHANGELOG.txt"
 
           DATE=$(date '+%Y-%m-%d %H:%M UTC')
@@ -192,66 +194,152 @@ jobs:
           # ── Kernel source info ──
           KERNEL_SHA=$(git rev-parse --short HEAD)
           KERNEL_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "${{ env.KERNEL_BRANCH }}")
-          KERNEL_LOG=$(git log --oneline --date=short --format="  %ad  %h  %s" -15)
+          KERNEL_LOG=$(git log --oneline --date=short --format="%ad|%h|%s" -15)
 
           # ── KSU info ──
           KSU_TAG="unknown"
           KSU_SHA="unknown"
-          KSU_LOG="  (not available)"
+          KSU_LOG=""
           if [ -d "${KSUDIR_LOCAL}" ]; then
             KSU_TAG=$(git -C "${KSUDIR_LOCAL}" describe --tags --abbrev=0 2>/dev/null \
               || git -C "${KSUDIR_LOCAL}" tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null | head -1 \
               || echo "main")
             KSU_SHA=$(git -C "${KSUDIR_LOCAL}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-            KSU_LOG=$(git -C "${KSUDIR_LOCAL}" log --oneline --date=short --format="  %ad  %h  %s" -15 2>/dev/null || echo "  (not available)")
+            KSU_LOG=$(git -C "${KSUDIR_LOCAL}" log --oneline --date=short --format="%ad|%h|%s" -15 2>/dev/null || echo "")
           fi
 
+          # ── Categorise commits function ──
+          categorise_commits() {
+            local LOG="$1"
+            local LABEL="$2"
+            local COUNTS_FILE="$3"
+
+            local SEC=0 FIX=0 FEAT=0 LTS=0 OTHER=0
+            local SEC_LINES="" FIX_LINES="" FEAT_LINES="" LTS_LINES="" OTHER_LINES=""
+
+            while IFS='|' read -r cdate chash cmsg; do
+              [ -z "$cmsg" ] && continue
+              cmsg_lower=$(echo "$cmsg" | tr '[:upper:]' '[:lower:]')
+
+              if echo "$cmsg_lower" | grep -qE 'security|cve-|vuln|overflow|use-after-free|oob|uaf|exploit|selinux fix'; then
+                SEC=$((SEC+1))
+                SEC_LINES="${SEC_LINES}    $(printf '\U0001F512') ${cdate}  ${chash}  ${cmsg}\n"
+              elif echo "$cmsg_lower" | grep -qE 'merge.*lts|merge.*5\.15\.|linux 5\.15\.|lts merge|upstream merge'; then
+                LTS=$((LTS+1))
+                LTS_LINES="${LTS_LINES}    $(printf '\U0001F504') ${cdate}  ${chash}  ${cmsg}\n"
+              elif echo "$cmsg_lower" | grep -qE 'fix|bug|crash|panic|null ptr|deadlock|race|hang|oops|regression|revert|resolve|repair'; then
+                FIX=$((FIX+1))
+                FIX_LINES="${FIX_LINES}    $(printf '\U0001F41B') ${cdate}  ${chash}  ${cmsg}\n"
+              elif echo "$cmsg_lower" | grep -qE 'feat|add|support|implement|introduce|enable|new|enhance|improv|optim'; then
+                FEAT=$((FEAT+1))
+                FEAT_LINES="${FEAT_LINES}    $(printf '\u2728') ${cdate}  ${chash}  ${cmsg}\n"
+              else
+                OTHER=$((OTHER+1))
+                OTHER_LINES="${OTHER_LINES}    $(printf '\U0001F527') ${cdate}  ${chash}  ${cmsg}\n"
+              fi
+            done <<< "$LOG"
+
+            echo "  ${LABEL}: ${SEC} security, ${FIX} bug fixes, ${FEAT} features, ${LTS} LTS merges, ${OTHER} other"
+            [ -n "$SEC_LINES" ]   && printf "  -- Security --\n${SEC_LINES}"
+            [ -n "$FIX_LINES" ]   && printf "  -- Bug Fixes --\n${FIX_LINES}"
+            [ -n "$FEAT_LINES" ]  && printf "  -- Features --\n${FEAT_LINES}"
+            [ -n "$LTS_LINES" ]   && printf "  -- LTS / Upstream Merges --\n${LTS_LINES}"
+            [ -n "$OTHER_LINES" ] && printf "  -- Other --\n${OTHER_LINES}"
+
+            echo "${SEC}:${FIX}:${FEAT}:${LTS}:${OTHER}" > "$COUNTS_FILE"
+          }
+
+          # ── Process kernel commits ──
+          KERNEL_RESULT=$(categorise_commits "$KERNEL_LOG" "Kernel" /tmp/kcounts)
+          read K_SEC K_FIX K_FEAT K_LTS K_OTHER <<< $(cat /tmp/kcounts | tr ':' ' ')
+
+          # ── Process KSU commits ──
+          KSU_RESULT=$(categorise_commits "$KSU_LOG" "$VARIANT" /tmp/ksucounts)
+          read KSU_SEC KSU_FIX KSU_FEAT KSU_LTS KSU_OTHER <<< $(cat /tmp/ksucounts | tr ':' ' ')
+
+          # ── Calculate flash priority ──
+          TOTAL_SEC=$((K_SEC + KSU_SEC))
+          TOTAL_FIX=$((K_FIX + KSU_FIX))
+          TOTAL_FEAT=$((K_FEAT + KSU_FEAT))
+
+          if [ "$TOTAL_SEC" -gt 0 ]; then
+            PRIORITY="FLASH NOW — Security patches detected"
+            PRIORITY_ICON="$(printf '\U0001F534')"
+          elif [ "$TOTAL_FIX" -gt 2 ] || [ "${K_LTS:-0}" -gt 0 ]; then
+            PRIORITY="RECOMMENDED — Bug fixes or LTS merge"
+            PRIORITY_ICON="$(printf '\U0001F7E1')"
+          elif [ "$TOTAL_FEAT" -gt 0 ] || [ "$TOTAL_FIX" -gt 0 ]; then
+            PRIORITY="OPTIONAL — Minor improvements"
+            PRIORITY_ICON="$(printf '\U0001F7E2')"
+          else
+            PRIORITY="SKIP — Maintenance only, no user-facing changes"
+            PRIORITY_ICON="$(printf '\u26AA')"
+          fi
+
+          PRIORITY_FULL="${PRIORITY_ICON} ${PRIORITY}"
+
           # ── Write CHANGELOG.txt ──
-          cat > "$CHANGELOG" << CHLOG
-          =====================================
-            SM8550 KERNEL BUILD CHANGELOG
-          =====================================
-          Build Date:     ${DATE}
-          Variant:        ${VARIANT}
-          Kernel Branch:  ${KERNEL_BRANCH}
-          Kernel Commit:  ${KERNEL_SHA}
-          KSU Version:    ${KSU_TAG}
-          KSU Commit:     ${KSU_SHA}
-          SUSFS Branch:   ${{ env.SUSFS_BRANCH }}
-          =====================================
+          {
+            echo "======================================================="
+            echo "  SM8550 KERNEL BUILD — CHANGE SUMMARY"
+            echo "======================================================="
+            echo ""
+            echo "  Build Date:     ${DATE}"
+            echo "  Variant:        ${VARIANT}"
+            echo "  Kernel:         ${KERNEL_BRANCH} @ ${KERNEL_SHA}"
+            echo "  KSU:            ${KSU_TAG} @ ${KSU_SHA}"
+            echo "  SUSFS:          ${{ env.SUSFS_BRANCH }} (see below)"
+            echo ""
+            echo "  +-------------------------------------------+"
+            echo "  |  FLASH PRIORITY: ${PRIORITY_FULL}"
+            echo "  +-------------------------------------------+"
+            echo ""
+            echo "-- KERNEL SOURCE (last 15 commits) -----------"
+            echo "$KERNEL_RESULT"
+            echo ""
+            echo "-- ${VARIANT} (last 15 commits) --------------"
+            echo "$KSU_RESULT"
+            echo ""
+            echo "-- SUSFS ---------------------------------------"
+            echo "  (appended after SUSFS clone)"
+          } > "$CHANGELOG"
 
-          ── KERNEL SOURCE (last 15 commits) ──
-          ${KERNEL_LOG}
-
-          ── ${VARIANT} (last 15 commits) ──
-          ${KSU_LOG}
-
-          ── SUSFS ──
-          (appended after SUSFS clone)
-          CHLOG
-
-          # ── Write GitHub Actions Job Summary ──
-          cat >> "$GITHUB_STEP_SUMMARY" << GHSUM
-          ## 🔨 Build: ${VARIANT}
-
-          | Component | Version | Commit |
-          |---|---|---|
-          | **Kernel** | \`${KERNEL_BRANCH}\` | \`${KERNEL_SHA}\` |
-          | **${VARIANT}** | \`${KSU_TAG}\` | \`${KSU_SHA}\` |
-          | **SUSFS** | \`${{ env.SUSFS_BRANCH }}\` | *(see below)* |
-
-          ### 📋 Kernel Source (last 15 commits)
-          \`\`\`
-          ${KERNEL_LOG}
-          \`\`\`
-
-          ### 📋 ${VARIANT} (last 15 commits)
-          \`\`\`
-          ${KSU_LOG}
-          \`\`\`
-          GHSUM
+          # ── GitHub Actions Job Summary ──
+          {
+            echo "## Build: ${VARIANT}"
+            echo ""
+            echo "| Component | Version | Commit |"
+            echo "|---|---|---|"
+            echo "| **Kernel** | \`${KERNEL_BRANCH}\` | \`${KERNEL_SHA}\` |"
+            echo "| **${VARIANT}** | \`${KSU_TAG}\` | \`${KSU_SHA}\` |"
+            echo "| **SUSFS** | \`${{ env.SUSFS_BRANCH }}\` | *(see below)* |"
+            echo ""
+            echo "### Flash Priority: ${PRIORITY_FULL}"
+            echo ""
+            echo "| Category | Kernel | KSU | Total |"
+            echo "|---|---|---|---|"
+            echo "| Security | ${K_SEC} | ${KSU_SEC} | ${TOTAL_SEC} |"
+            echo "| Bug Fixes | ${K_FIX} | ${KSU_FIX} | ${TOTAL_FIX} |"
+            echo "| Features | ${K_FEAT} | ${KSU_FEAT} | ${TOTAL_FEAT} |"
+            echo "| LTS Merges | ${K_LTS:-0} | - | ${K_LTS:-0} |"
+            echo ""
+            echo "<details><summary>Kernel Commits (last 15)</summary>"
+            echo ""
+            echo '```'
+            echo "$KERNEL_RESULT"
+            echo '```'
+            echo "</details>"
+            echo ""
+            echo "<details><summary>${VARIANT} Commits (last 15)</summary>"
+            echo ""
+            echo '```'
+            echo "$KSU_RESULT"
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           echo "CHANGELOG_PATH=${CHANGELOG}" >> $GITHUB_ENV
+          echo "FLASH_PRIORITY=${PRIORITY_FULL}" >> $GITHUB_ENV
           echo "==> Changelog generated."
 
       - name: KPM uapi headers + Dynamic Header Fixes
@@ -355,27 +443,44 @@ jobs:
             exit 1
           fi
 
-          # ── Append SUSFS changelog ──
+          # ── Append SUSFS changelog (categorised) ──
           SUSFS_SHA=$(git -C susfs4ksu rev-parse --short HEAD 2>/dev/null || echo "unknown")
-          SUSFS_LOG=$(git -C susfs4ksu log --oneline --date=short --format="  %ad  %h  %s" -15 2>/dev/null || echo "  (not available)")
+          SUSFS_LOG=$(git -C susfs4ksu log --oneline --date=short --format="%ad|%h|%s" -15 2>/dev/null || echo "")
 
           if [ -f "$CHANGELOG_PATH" ]; then
-            cat >> "$CHANGELOG_PATH" << SUSFSLOG
-
-          ── SUSFS (last 15 commits) ──
-          Branch: ${{ env.SUSFS_BRANCH }}
-          Commit: ${SUSFS_SHA}
-          ${SUSFS_LOG}
-          SUSFSLOG
+            {
+              echo ""
+              echo "-- SUSFS (last 15 commits) ---------------------"
+              echo "  Branch: ${{ env.SUSFS_BRANCH }} @ ${SUSFS_SHA}"
+              while IFS='|' read -r cdate chash cmsg; do
+                [ -z "$cmsg" ] && continue
+                cmsg_lower=$(echo "$cmsg" | tr '[:upper:]' '[:lower:]')
+                if echo "$cmsg_lower" | grep -qE 'security|cve-|vuln'; then
+                  printf '    \U0001F512 %s  %s  %s\n' "$cdate" "$chash" "$cmsg"
+                elif echo "$cmsg_lower" | grep -qE 'fix|bug|crash'; then
+                  printf '    \U0001F41B %s  %s  %s\n' "$cdate" "$chash" "$cmsg"
+                elif echo "$cmsg_lower" | grep -qE 'feat|add|support|new|enhance'; then
+                  printf '    \u2728 %s  %s  %s\n' "$cdate" "$chash" "$cmsg"
+                else
+                  printf '    \U0001F527 %s  %s  %s\n' "$cdate" "$chash" "$cmsg"
+                fi
+              done <<< "$SUSFS_LOG"
+            } >> "$CHANGELOG_PATH"
 
             # Update job summary
-            cat >> "$GITHUB_STEP_SUMMARY" << GHSUSFS
-
-          ### 📋 SUSFS (last 15 commits) — commit \`${SUSFS_SHA}\`
-          \`\`\`
-          ${SUSFS_LOG}
-          \`\`\`
-          GHSUSFS
+            {
+              echo ""
+              echo "<details><summary>SUSFS Commits (last 15) — \`${SUSFS_SHA}\`</summary>"
+              echo ""
+              echo '```'
+              echo "Branch: ${{ env.SUSFS_BRANCH }} @ ${SUSFS_SHA}"
+              while IFS='|' read -r cdate chash cmsg; do
+                [ -z "$cmsg" ] && continue
+                echo "  ${cdate}  ${chash}  ${cmsg}"
+              done <<< "$SUSFS_LOG"
+              echo '```'
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
 
             echo "==> SUSFS changelog appended."
           fi
@@ -442,53 +547,48 @@ jobs:
           KSU_KCONFIG="drivers/kernelsu/Kconfig"
           FAILED=0
 
-          # Mandatory: CONFIG_KSU must be set
           if grep -q 'CONFIG_KSU=y' "$CONFIG"; then
-            echo "  ✅ CONFIG_KSU=y"
+            echo "  CONFIG_KSU=y"
           else
-            echo "  ❌ CONFIG_KSU=y is MISSING!"
+            echo "  CONFIG_KSU=y is MISSING!"
             FAILED=1
           fi
 
-          # Mandatory: CONFIG_KSU_SUSFS must be set
           if grep -q 'CONFIG_KSU_SUSFS=y' "$CONFIG"; then
-            echo "  ✅ CONFIG_KSU_SUSFS=y"
+            echo "  CONFIG_KSU_SUSFS=y"
           else
-            echo "  ❌ CONFIG_KSU_SUSFS=y is MISSING!"
+            echo "  CONFIG_KSU_SUSFS=y is MISSING!"
             FAILED=1
           fi
 
-          # Dynamic: verify all KSU_SUSFS sub-options from Kconfig
           echo "  --- SUSFS sub-options ---"
           grep -oE '^config KSU_SUSFS_[A-Z_]+' "$KSU_KCONFIG" | while read -r line; do
             OPT="CONFIG_${line#config }"
             if grep -q "${OPT}=y" "$CONFIG"; then
-              echo "  ✅ ${OPT}=y"
+              echo "  ${OPT}=y"
             else
-              echo "  ⚠️  ${OPT}=y not set (may have been dropped by olddefconfig)"
+              echo "  ${OPT}=y not set (may have been dropped by olddefconfig)"
             fi
           done
 
-          # KPM verification
           if [ "${{ matrix.enable_kpm }}" = "true" ]; then
             echo "  --- KPM options ---"
             for opt in CONFIG_KPM CONFIG_KALLSYMS CONFIG_KALLSYMS_ALL; do
               if grep -q "${opt}=y" "$CONFIG"; then
-                echo "  ✅ ${opt}=y"
+                echo "  ${opt}=y"
               else
-                echo "  ❌ ${opt}=y is MISSING!"
+                echo "  ${opt}=y is MISSING!"
                 FAILED=1
               fi
             done
           fi
 
-          # Manual hook — informational only
           if [ "${{ matrix.use_manual_hook }}" = "true" ]; then
             echo "  --- Hook mode ---"
             if grep -q 'CONFIG_KSU_MANUAL_HOOK=y' "$CONFIG"; then
-              echo "  ✅ CONFIG_KSU_MANUAL_HOOK=y (inline hook mode)"
+              echo "  CONFIG_KSU_MANUAL_HOOK=y (inline hook mode)"
             else
-              echo "  ℹ️  CONFIG_KSU_MANUAL_HOOK not in .config (driver may handle hooks internally)"
+              echo "  CONFIG_KSU_MANUAL_HOOK not in .config (driver may handle hooks internally)"
             fi
           fi
 
@@ -554,25 +654,25 @@ jobs:
           FAILED=0
 
           if find out/ -name "susfs.o" | grep -q .; then
-            echo "  ✅ fs/susfs.o found — SUSFS was compiled."
+            echo "  susfs.o found — SUSFS was compiled."
           else
-            echo "  ❌ fs/susfs.o NOT found — SUSFS was NOT compiled!"
+            echo "  susfs.o NOT found — SUSFS was NOT compiled!"
             FAILED=1
           fi
 
           if [ "${{ matrix.enable_kpm }}" = "true" ]; then
             if find out/ -path "*/kernelsu/kpm/*.o" | grep -q .; then
-              echo "  ✅ KPM objects found — KPM was compiled."
+              echo "  KPM objects found — KPM was compiled."
             else
-              echo "  ❌ KPM objects NOT found — KPM was NOT compiled!"
+              echo "  KPM objects NOT found — KPM was NOT compiled!"
               FAILED=1
             fi
           fi
 
           if [ -f out/arch/arm64/boot/Image.gz ] || [ -f out/arch/arm64/boot/Image ]; then
-            echo "  ✅ Kernel image found."
+            echo "  Kernel image found."
           else
-            echo "  ❌ Kernel image NOT found!"
+            echo "  Kernel image NOT found!"
             FAILED=1
           fi
 
@@ -600,6 +700,28 @@ jobs:
             cp "$CHANGELOG_PATH" AnyKernel3/
             echo "==> CHANGELOG.txt included in AnyKernel3 package."
           fi
+
+      # ════════════════════════════════════════════════════════════
+      # ── Print build changelog to Actions log ──
+      # ════════════════════════════════════════════════════════════
+      - name: Print build changelog
+        run: |
+          echo ""
+          echo "========================================================"
+          echo "              BUILD CHANGELOG SUMMARY"
+          echo "========================================================"
+          echo ""
+          if [ -f "$CHANGELOG_PATH" ]; then
+            cat "$CHANGELOG_PATH"
+          else
+            echo "  (No changelog generated)"
+          fi
+          echo ""
+          echo "========================================================"
+          echo "  VERDICT: ${FLASH_PRIORITY}"
+          echo ""
+          echo "  Artifact: sm8550-${{ steps.meta.outputs.kernelversion }}-${BUILDSUFFIX}-susfs-${{ steps.meta.outputs.date }}"
+          echo "========================================================"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
