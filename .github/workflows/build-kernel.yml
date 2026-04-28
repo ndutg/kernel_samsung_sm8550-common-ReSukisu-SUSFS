@@ -629,33 +629,42 @@ jobs:
       - name: Create KSU hook bridge stubs
         run: |
           echo "==> Creating bridge stubs for pre-baked KSU hooks..."
-          printf '%s\n' \
-            '#include <linux/types.h>' \
-            '#include <linux/fs.h>' \
-            '#include <linux/version.h>' \
-            '#include <linux/jump_label.h>' \
-            '#if !defined(CONFIG_KSU_MANUAL_HOOK)' \
-            'DEFINE_STATIC_KEY_FALSE(ksu_is_init_rc_hook_enabled);' \
-            'DEFINE_STATIC_KEY_FALSE(ksu_is_input_hook_enabled);' \
-            '#endif' \
-            'int __attribute__((weak)) ksu_handle_sys_reboot(void) { return 0; }' \
-            'int __attribute__((weak)) ksu_handle_sys_read(unsigned int fd, char __user *buf, size_t count) { return 0; }' \
-            'int __attribute__((weak)) ksu_handle_vfs_fstat(int fd, struct kstat *stat) { return 0; }' \
-            'int __attribute__((weak)) ksu_handle_devpts(struct inode *inode) { return 0; }' \
-            'int __attribute__((weak)) ksu_input_hook(void *dev, unsigned int type, unsigned int code, int value) { return 0; }' \
-            'int __attribute__((weak)) ksu_execveat_hook(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }' \
-            'int __attribute__((weak)) ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }' \
-            'int __attribute__((weak)) ksu_handle_execveat_sucompat(int *fd, const char __user **filename_user, void *argv, void *envp, int *flags) { return 0; }' \
-            'int __attribute__((weak)) ksu_init_rc_hook(const char *data, unsigned long count) { return 0; }' \
-            'bool __attribute__((weak)) susfs_is_current_ksu_domain(void) { return true; }' \
-            'unsigned int __attribute__((weak)) susfs_ksu_sid;' \
-            'unsigned int __attribute__((weak)) susfs_priv_app_sid;' \
-            > kernel/ksu_hooks_bridge.c
+
+          # Static keys only needed for KSU-Next (ReSukiSU defines them internally)
+          STATIC_KEY_LINES=""
+          if [ "${{ matrix.use_manual_hook }}" != "true" ]; then
+            STATIC_KEY_LINES=$(printf '%s\n' \
+              'DEFINE_STATIC_KEY_FALSE(ksu_is_init_rc_hook_enabled);' \
+              'DEFINE_STATIC_KEY_FALSE(ksu_is_input_hook_enabled);')
+            echo "  Including static key stubs (KSU-Next variant)"
+          else
+            echo "  Skipping static key stubs (ReSukiSU defines them internally)"
+          fi
+
+          {
+            echo '#include <linux/types.h>'
+            echo '#include <linux/fs.h>'
+            echo '#include <linux/version.h>'
+            echo '#include <linux/jump_label.h>'
+            [ -n "$STATIC_KEY_LINES" ] && echo "$STATIC_KEY_LINES"
+            echo 'int __attribute__((weak)) ksu_handle_sys_reboot(void) { return 0; }'
+            echo 'int __attribute__((weak)) ksu_handle_sys_read(unsigned int fd, char __user *buf, size_t count) { return 0; }'
+            echo 'int __attribute__((weak)) ksu_handle_vfs_fstat(int fd, struct kstat *stat) { return 0; }'
+            echo 'int __attribute__((weak)) ksu_handle_devpts(struct inode *inode) { return 0; }'
+            echo 'int __attribute__((weak)) ksu_input_hook(void *dev, unsigned int type, unsigned int code, int value) { return 0; }'
+            echo 'int __attribute__((weak)) ksu_execveat_hook(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }'
+            echo 'int __attribute__((weak)) ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }'
+            echo 'int __attribute__((weak)) ksu_handle_execveat_sucompat(int *fd, const char __user **filename_user, void *argv, void *envp, int *flags) { return 0; }'
+            echo 'int __attribute__((weak)) ksu_init_rc_hook(const char *data, unsigned long count) { return 0; }'
+            echo 'bool __attribute__((weak)) susfs_is_current_ksu_domain(void) { return true; }'
+            echo 'unsigned int __attribute__((weak)) susfs_ksu_sid;'
+            echo 'unsigned int __attribute__((weak)) susfs_priv_app_sid;'
+          } > kernel/ksu_hooks_bridge.c
+
           if ! grep -q 'ksu_hooks_bridge' kernel/Makefile; then
             echo 'obj-y += ksu_hooks_bridge.o' >> kernel/Makefile
           fi
           echo "==> Bridge stubs created."
-          grep 'ksu_hooks_bridge' kernel/Makefile || echo "WARNING: Entry not found!"
 
       - name: Build kernel (${{ matrix.display_name }})
         run: |
