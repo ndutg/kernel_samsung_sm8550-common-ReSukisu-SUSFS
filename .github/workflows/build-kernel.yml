@@ -620,16 +620,11 @@ jobs:
 
       # ════════════════════════════════════════════════════════════
       # ── KSU hook bridge stubs ──
-      #   Provides weak symbols for pre-baked KSU-Next hooks in
-      #   the ndutg kernel source.
-      #
-      #   FIX: Added DEFINE_STATIC_KEY_FALSE for:
-      #     - ksu_is_init_rc_hook_enabled (referenced in read_write.c)
-      #     - ksu_is_input_hook_enabled   (referenced in input.c)
-      #   KSU-Next uses kprobes so never defines these. ReSukiSU
-      #   defines them internally so the weak versions here are
-      #   only used by the KSU-Next variant. STATIC_KEY_FALSE
-      #   means the branches default to "not taken" = safe no-op.
+      #   FIX: Static key definitions wrapped in
+      #   #if !defined(CONFIG_KSU_MANUAL_HOOK) so they only
+      #   compile for KSU-Next. ReSukiSU defines these internally
+      #   — including them unconditionally causes duplicate symbol
+      #   linker errors.
       # ════════════════════════════════════════════════════════════
       - name: Create KSU hook bridge stubs
         run: |
@@ -639,8 +634,10 @@ jobs:
             '#include <linux/fs.h>' \
             '#include <linux/version.h>' \
             '#include <linux/jump_label.h>' \
+            '#if !defined(CONFIG_KSU_MANUAL_HOOK)' \
             'DEFINE_STATIC_KEY_FALSE(ksu_is_init_rc_hook_enabled);' \
             'DEFINE_STATIC_KEY_FALSE(ksu_is_input_hook_enabled);' \
+            '#endif' \
             'int __attribute__((weak)) ksu_handle_sys_reboot(void) { return 0; }' \
             'int __attribute__((weak)) ksu_handle_sys_read(unsigned int fd, char __user *buf, size_t count) { return 0; }' \
             'int __attribute__((weak)) ksu_handle_vfs_fstat(int fd, struct kstat *stat) { return 0; }' \
