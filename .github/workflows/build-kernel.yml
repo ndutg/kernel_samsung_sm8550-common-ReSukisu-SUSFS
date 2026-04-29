@@ -201,13 +201,16 @@ jobs:
           VARIANT="${{ matrix.display_name }}"
           KSUDIR_LOCAL="${{ matrix.ksu_dir }}"
 
-          # ── Load previous build SHAs ──
+          # ── Load previous build SHAs (safe parsing — no source) ──
           PREV_KERNEL_SHA=""
           PREV_KSU_SHA=""
           PREV_SUSFS_SHA=""
           PREV_DATE=""
           if [ -f ".prev_build_shas" ]; then
-            source .prev_build_shas
+            PREV_KERNEL_SHA=$(grep '^PREV_KERNEL_SHA=' .prev_build_shas | cut -d= -f2- | tr -d "'")
+            PREV_KSU_SHA=$(grep '^PREV_KSU_SHA=' .prev_build_shas | cut -d= -f2- | tr -d "'")
+            PREV_SUSFS_SHA=$(grep '^PREV_SUSFS_SHA=' .prev_build_shas | cut -d= -f2- | tr -d "'")
+            PREV_DATE=$(grep '^PREV_DATE=' .prev_build_shas | cut -d= -f2- | tr -d "'")
             echo "  Previous build found: ${PREV_DATE:-unknown}"
             echo "  Previous kernel SHA: ${PREV_KERNEL_SHA:-unknown}"
             echo "  Previous KSU SHA:    ${PREV_KSU_SHA:-unknown}"
@@ -490,15 +493,15 @@ jobs:
             exit 1
           fi
 
-          # ── Append SUSFS changelog (delta-aware) ──
+          # ── Append SUSFS changelog (delta-aware, safe parsing) ──
           SUSFS_SHA=$(git -C susfs4ksu rev-parse --short HEAD 2>/dev/null || echo "unknown")
           SUSFS_LOG=""
           SUSFS_SINCE="last 15 commits"
 
-          # Load previous SUSFS SHA if available
+          # Load previous SUSFS SHA safely
           PREV_SUSFS_SHA=""
           if [ -f ".prev_build_shas" ]; then
-            source .prev_build_shas
+            PREV_SUSFS_SHA=$(grep '^PREV_SUSFS_SHA=' .prev_build_shas | cut -d= -f2- | tr -d "'")
           fi
 
           if [ -n "$PREV_SUSFS_SHA" ] && git -C susfs4ksu cat-file -e "${PREV_SUSFS_SHA}^{commit}" 2>/dev/null; then
@@ -682,8 +685,7 @@ jobs:
       # ════════════════════════════════════════════════════════════
       # ── KSU hook bridge stubs ──
       #   Static keys conditionally included via shell check on
-      #   matrix.use_manual_hook (not C preprocessor — ReSukiSU
-      #   doesn't set CONFIG_KSU_MANUAL_HOOK in Kconfig).
+      #   matrix.use_manual_hook at workflow runtime.
       #   KSU-Next needs them, ReSukiSU defines them internally.
       # ════════════════════════════════════════════════════════════
       - name: Create KSU hook bridge stubs
@@ -820,6 +822,8 @@ jobs:
 
       # ════════════════════════════════════════════════════════════
       # ── Save build SHAs for next run's delta changelog ──
+      #   Only saved on successful build so a failed build
+      #   doesn't corrupt the baseline.
       # ════════════════════════════════════════════════════════════
       - name: Save build SHAs for next run
         if: success()
