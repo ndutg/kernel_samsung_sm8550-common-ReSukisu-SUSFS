@@ -825,10 +825,10 @@ jobs:
         if: success()
         run: |
           {
-            echo "PREV_KERNEL_SHA=$(git rev-parse HEAD)"
-            echo "PREV_KSU_SHA=$(git -C "$KSUDIR" rev-parse HEAD 2>/dev/null || echo '')"
-            echo "PREV_SUSFS_SHA=${CURRENT_SUSFS_SHA:-}"
-            echo "PREV_DATE=$(date '+%Y-%m-%d %H:%M UTC')"
+            echo "PREV_KERNEL_SHA='$(git rev-parse HEAD)'"
+            echo "PREV_KSU_SHA='$(git -C "$KSUDIR" rev-parse HEAD 2>/dev/null || echo '')'"
+            echo "PREV_SUSFS_SHA='${CURRENT_SUSFS_SHA:-}'"
+            echo "PREV_DATE='$(date '+%Y-%m-%d %H:%M UTC')'"
           } > .prev_build_shas
           echo "==> Build SHAs saved for next run:"
           cat .prev_build_shas
