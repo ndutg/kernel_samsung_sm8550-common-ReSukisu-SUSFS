@@ -2,7 +2,7 @@ name: Build SM8550 Kernel — KSU-Next + ReSukiSU
 
 on:
   schedule:
-    - cron: '0 2 * * *'   # Daily at 2:00 AM UTC (2:00 PM NZST) — ReSukiSU only
+    - cron: '0 3 * * *'   # Daily at 2:00 AM UTC (2:00 PM NZST) — ReSukiSU only
   workflow_dispatch:
     inputs:
       build_ksun:
