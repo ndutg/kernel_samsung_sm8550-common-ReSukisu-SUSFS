@@ -2,7 +2,7 @@ name: Build SM8550 Kernel — KSU-Next + ReSukiSU
 
 on:
   schedule:
-    - cron: '35 3 * * *'   # Daily at 2:00 AM UTC (2:00 PM NZST) — ReSukiSU only
+    - cron: '0 3 * * *'   # Daily at 2:00 AM UTC (2:00 PM NZST) — ReSukiSU only
   workflow_dispatch:
     inputs:
       build_ksun:
@@ -801,7 +801,7 @@ jobs:
       #   RECOMMENDED. Silently skips if webhook isn't configured.
       # ════════════════════════════════════════════════════════════
       - name: Discord notification
-        if: success() && (contains(env.FLASH_PRIORITY, 'FLASH NOW') || contains(env.FLASH_PRIORITY, 'RECOMMENDED'))
+        if: success()
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
@@ -812,14 +812,19 @@ jobs:
 
           echo "==> Sending Discord notification..."
 
-          # Determine embed colour
+          # Determine embed colour and label for all priorities
           if echo "$FLASH_PRIORITY" | grep -q "FLASH NOW"; then
             EMBED_COLOR=15548997    # Red (#ED4245)
             PRIORITY_LABEL="🔴 FLASH NOW — Security patches detected"
-          else
+          elif echo "$FLASH_PRIORITY" | grep -q "RECOMMENDED"; then
             EMBED_COLOR=16776960    # Yellow (#FFFF00)
             PRIORITY_LABEL="🟡 RECOMMENDED — Bug fixes or LTS merge"
-          fi
+          elif echo "$FLASH_PRIORITY" | grep -q "OPTIONAL"; then
+            EMBED_COLOR=5763719     # Green (#57F287)
+            PRIORITY_LABEL="🟢 OPTIONAL — Minor improvements"
+          else
+            EMBED_COLOR=9807270     # Grey (#95A5A6)
+            PRIORITY_LABEL="⚪ SKIP — Maintenance only, no user-facing changes"
 
           VARIANT="${{ matrix.display_name }}"
           ARTIFACT="sm8550-${{ steps.meta.outputs.kernelversion }}-${BUILDSUFFIX}-susfs-${{ steps.meta.outputs.date }}"
