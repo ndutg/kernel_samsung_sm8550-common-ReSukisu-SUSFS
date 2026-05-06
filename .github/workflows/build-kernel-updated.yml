@@ -812,19 +812,21 @@ jobs:
 
           echo "==> Sending Discord notification..."
 
+
           # Determine embed colour and label for all priorities
           if echo "$FLASH_PRIORITY" | grep -q "FLASH NOW"; then
-            EMBED_COLOR=15548997    # Red (#ED4245)
+            EMBED_COLOR=15548997
             PRIORITY_LABEL="🔴 FLASH NOW — Security patches detected"
           elif echo "$FLASH_PRIORITY" | grep -q "RECOMMENDED"; then
-            EMBED_COLOR=16776960    # Yellow (#FFFF00)
+            EMBED_COLOR=16776960
             PRIORITY_LABEL="🟡 RECOMMENDED — Bug fixes or LTS merge"
           elif echo "$FLASH_PRIORITY" | grep -q "OPTIONAL"; then
-            EMBED_COLOR=5763719     # Green (#57F287)
+            EMBED_COLOR=5763719
             PRIORITY_LABEL="🟢 OPTIONAL — Minor improvements"
           else
-            EMBED_COLOR=9807270     # Grey (#95A5A6)
+            EMBED_COLOR=9807270
             PRIORITY_LABEL="⚪ SKIP — Maintenance only, no user-facing changes"
+          fi
 
           VARIANT="${{ matrix.display_name }}"
           ARTIFACT="sm8550-${{ steps.meta.outputs.kernelversion }}-${BUILDSUFFIX}-susfs-${{ steps.meta.outputs.date }}"
