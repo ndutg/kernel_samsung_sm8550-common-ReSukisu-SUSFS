@@ -1,0 +1,263 @@
+name: Upstream Monitor — Changelog & Notify
+
+on:
+  schedule:
+    - cron: '30 2 * * *'   # Daily at 2:30 AM UTC (2:30 PM NZST) — 30 min after build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  UPSTREAM_REPO: reddxae/kernel_samsung_sm8550-common-ksu
+  UPSTREAM_BRANCH: android13-5.15
+  FORK_BRANCH: android13-5.15
+
+jobs:
+
+  monitor:
+    name: Check upstream for changes
+    runs-on: ubuntu-24.04
+
+    steps:
+
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FORK_BRANCH }}
+          fetch-depth: 0
+
+      - name: Restore last upstream check SHA
+        id: prev-sha
+        uses: actions/cache/restore@v4
+        with:
+          path: .upstream_last_sha
+          key: upstream-monitor-sha-
+          restore-keys: |
+            upstream-monitor-sha-
+
+      - name: Fetch upstream and compare
+        id: compare
+        run: |
+          echo "==> Adding upstream remote..."
+          git remote add upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git"
+          git fetch upstream "${{ env.UPSTREAM_BRANCH }}" --depth=100
+
+          UPSTREAM_SHA=$(git rev-parse "upstream/${{ env.UPSTREAM_BRANCH }}")
+          FORK_SHA=$(git rev-parse HEAD)
+          echo "  Upstream HEAD: ${UPSTREAM_SHA}"
+          echo "  Fork HEAD:     ${FORK_SHA}"
+
+          # ── Load previous checked SHA ──
+          PREV_SHA=""
+          if [ -f ".upstream_last_sha" ]; then
+            PREV_SHA=$(grep '^UPSTREAM_SHA=' .upstream_last_sha | cut -d= -f2- | tr -d "'")
+            echo "  Previous check SHA: ${PREV_SHA:-none}"
+          else
+            echo "  No previous check found."
+          fi
+
+          # ── Get commit log ──
+          if [ -n "$PREV_SHA" ] && git cat-file -e "${PREV_SHA}^{commit}" 2>/dev/null; then
+            COMMIT_LOG=$(git log --oneline --date=short --format="%ad|%h|%s" "${PREV_SHA}..upstream/${{ env.UPSTREAM_BRANCH }}" 2>/dev/null || echo "")
+            SINCE_LABEL="since last check"
+          else
+            COMMIT_LOG=$(git log --oneline --date=short --format="%ad|%h|%s" -20 "upstream/${{ env.UPSTREAM_BRANCH }}" 2>/dev/null || echo "")
+            SINCE_LABEL="last 20 commits"
+          fi
+
+          COMMIT_COUNT=$(echo "$COMMIT_LOG" | grep -c '|' || echo "0")
+          echo "  New commits: ${COMMIT_COUNT}"
+
+          if [ "$COMMIT_COUNT" -eq 0 ] || [ -z "$COMMIT_LOG" ]; then
+            echo "==> No new upstream changes."
+            echo "NEW_COMMITS=0" >> $GITHUB_ENV
+            echo "UPSTREAM_SHA=${UPSTREAM_SHA}" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          # ── Categorise commits ──
+          SEC=0 FIX=0 FEAT=0 LTS=0 OTHER=0
+          FORMATTED_LIST=""
+          COUNTER=0
+
+          while IFS='|' read -r cdate chash cmsg; do
+            [ -z "$cmsg" ] && continue
+            cmsg_lower=$(echo "$cmsg" | tr '[:upper:]' '[:lower:]')
+
+            if echo "$cmsg_lower" | grep -qE 'security|cve-|vuln|overflow|use-after-free|oob|uaf|exploit|selinux fix'; then
+              SEC=$((SEC+1))
+              ICON="$(printf '\U0001F512')"
+            elif echo "$cmsg_lower" | grep -qE 'merge.*lts|merge.*5\.15\.|linux 5\.15\.|lts merge|upstream merge'; then
+              LTS=$((LTS+1))
+              ICON="$(printf '\U0001F504')"
+            elif echo "$cmsg_lower" | grep -qE 'fix|bug|crash|panic|null ptr|deadlock|race|hang|oops|regression|revert|resolve|repair'; then
+              FIX=$((FIX+1))
+              ICON="$(printf '\U0001F41B')"
+            elif echo "$cmsg_lower" | grep -qE 'feat|add|support|implement|introduce|enable|new|enhance|improv|optim'; then
+              FEAT=$((FEAT+1))
+              ICON="$(printf '\u2728')"
+            else
+              OTHER=$((OTHER+1))
+              ICON="$(printf '\U0001F527')"
+            fi
+
+            COUNTER=$((COUNTER+1))
+            if [ "$COUNTER" -le 10 ]; then
+              FORMATTED_LIST="${FORMATTED_LIST}${ICON} \`${chash}\` ${cmsg}\n"
+            fi
+          done <<< "$COMMIT_LOG"
+
+          if [ "$COMMIT_COUNT" -gt 10 ]; then
+            FORMATTED_LIST="${FORMATTED_LIST}\n... and $((COMMIT_COUNT - 10)) more commits"
+          fi
+
+          # ── Calculate sync priority ──
+          if [ "$SEC" -gt 0 ]; then
+            SYNC_PRIORITY="$(printf '\U0001F534') SYNC RECOMMENDED — Security patches upstream"
+            SYNC_LEVEL="CRITICAL"
+          elif [ "$FIX" -gt 2 ] || [ "$LTS" -gt 0 ]; then
+            SYNC_PRIORITY="$(printf '\U0001F7E1') WORTH SYNCING — Bug fixes or LTS merge available"
+            SYNC_LEVEL="RECOMMENDED"
+          elif [ "$FEAT" -gt 0 ]; then
+            SYNC_PRIORITY="$(printf '\U0001F7E2') OPTIONAL — New features available"
+            SYNC_LEVEL="OPTIONAL"
+          else
+            SYNC_PRIORITY="$(printf '\u26AA') NO ACTION — Maintenance commits only"
+            SYNC_LEVEL="SKIP"
+          fi
+
+          echo "  Sync priority: ${SYNC_PRIORITY}"
+          echo "  Security: ${SEC}, Fixes: ${FIX}, Features: ${FEAT}, LTS: ${LTS}, Other: ${OTHER}"
+
+          # ── Export to environment ──
+          echo "NEW_COMMITS=${COMMIT_COUNT}" >> $GITHUB_ENV
+          echo "UPSTREAM_SHA=${UPSTREAM_SHA}" >> $GITHUB_ENV
+          echo "SYNC_LEVEL=${SYNC_LEVEL}" >> $GITHUB_ENV
+          echo "TOTAL_SEC=${SEC}" >> $GITHUB_ENV
+          echo "TOTAL_FIX=${FIX}" >> $GITHUB_ENV
+          echo "TOTAL_FEAT=${FEAT}" >> $GITHUB_ENV
+          echo "TOTAL_LTS=${LTS}" >> $GITHUB_ENV
+          echo "TOTAL_OTHER=${OTHER}" >> $GITHUB_ENV
+
+          # Use a delimiter for multi-line env vars
+          echo "SYNC_PRIORITY<<EOF" >> $GITHUB_ENV
+          echo "${SYNC_PRIORITY}" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+          echo "FORMATTED_LIST<<EOF" >> $GITHUB_ENV
+          printf "${FORMATTED_LIST}" >> $GITHUB_ENV
+          echo "" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+          COMPARE_URL="https://github.com/${{ env.UPSTREAM_REPO }}/compare/${PREV_SHA:-${FORK_SHA}}...${UPSTREAM_SHA}"
+          echo "COMPARE_URL=${COMPARE_URL}" >> $GITHUB_ENV
+
+          # ── GitHub Actions Job Summary ──
+          {
+            echo "## Upstream Monitor — ${{ env.UPSTREAM_REPO }}"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|---|---|"
+            echo "| **New Commits** | ${COMMIT_COUNT} (${SINCE_LABEL}) |"
+            echo "| **Sync Priority** | ${SYNC_PRIORITY} |"
+            echo "| **Security** | ${SEC} |"
+            echo "| **Bug Fixes** | ${FIX} |"
+            echo "| **Features** | ${FEAT} |"
+            echo "| **LTS Merges** | ${LTS} |"
+            echo "| **Other** | ${OTHER} |"
+            echo "| **Upstream SHA** | \`${UPSTREAM_SHA}\` |"
+            echo ""
+            echo "### Recent Commits"
+            echo ""
+            echo '```'
+            echo "$COMMIT_LOG" | head -20
+            echo '```'
+            echo ""
+            echo "[View full diff on GitHub](${COMPARE_URL})"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ════════════════════════════════════════════════════════════
+      # ── Discord notification — upstream changes ──
+      # ════════════════════════════════════════════════════════════
+      - name: Discord notification — upstream changes
+        if: success() && env.NEW_COMMITS != '0'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "==> Discord webhook not configured — skipping notification."
+            exit 0
+          fi
+
+          echo "==> Sending upstream changelog to Discord..."
+
+          # Determine embed colour
+          case "$SYNC_LEVEL" in
+            CRITICAL)    EMBED_COLOR=15548997 ;;   # Red
+            RECOMMENDED) EMBED_COLOR=16776960 ;;   # Yellow
+            OPTIONAL)    EMBED_COLOR=5763719  ;;   # Green
+            *)           EMBED_COLOR=9807270  ;;   # Grey
+          esac
+
+          # Truncate commit list for Discord (max ~3500 chars to be safe)
+          COMMIT_DESC=$(printf '%s' "$FORMATTED_LIST" | head -c 3500)
+
+          PAYLOAD=$(jq -n \
+            --arg title "📡 Upstream Changes Detected — ${NEW_COMMITS} new commit(s)" \
+            --arg desc "$COMMIT_DESC" \
+            --arg priority "$SYNC_PRIORITY" \
+            --arg commits "📊 ${NEW_COMMITS} commits" \
+            --arg sec "🔒 Security: ${TOTAL_SEC}" \
+            --arg fix "🐛 Bug Fixes: ${TOTAL_FIX}" \
+            --arg feat "✨ Features: ${TOTAL_FEAT}" \
+            --arg lts "🔄 LTS Merges: ${TOTAL_LTS}" \
+            --arg other "🔧 Other: ${TOTAL_OTHER}" \
+            --arg compare "$COMPARE_URL" \
+            --argjson color "$EMBED_COLOR" \
+            '{
+              "embeds": [{
+                "title": $title,
+                "description": $desc,
+                "color": $color,
+                "fields": [
+                  { "name": "Sync Priority",  "value": $priority, "inline": false },
+                  { "name": "Total Commits",  "value": $commits,  "inline": true  },
+                  { "name": "Security",        "value": $sec,      "inline": true  },
+                  { "name": "Bug Fixes",       "value": $fix,      "inline": true  },
+                  { "name": "Features",        "value": $feat,     "inline": true  },
+                  { "name": "LTS Merges",      "value": $lts,      "inline": true  },
+                  { "name": "Other",           "value": $other,    "inline": true  },
+                  { "name": "View Full Diff",  "value": ("[Compare on GitHub](" + $compare + ")"), "inline": false }
+                ],
+                "footer": { "text": "Upstream Monitor • reddxae/kernel_samsung_sm8550-common-ksu" },
+                "timestamp": (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+              }]
+            }')
+
+          curl -sSf -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL" \
+            && echo "==> Discord notification sent." \
+            || echo "WARNING: Discord notification failed (non-fatal)."
+
+      # ════════════════════════════════════════════════════════════
+      # ── Save upstream SHA for next run ──
+      # ════════════════════════════════════════════════════════════
+      - name: Save upstream SHA
+        if: success()
+        run: |
+          {
+            echo "UPSTREAM_SHA='${UPSTREAM_SHA}'"
+            echo "CHECK_DATE='$(date '+%Y-%m-%d %H:%M UTC')'"
+          } > .upstream_last_sha
+          echo "==> Upstream SHA saved:"
+          cat .upstream_last_sha
+
+      - name: Cache upstream SHA
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: .upstream_last_sha
+          key: upstream-monitor-sha-${{ github.run_id }}
