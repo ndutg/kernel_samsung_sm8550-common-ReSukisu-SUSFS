@@ -713,6 +713,30 @@ jobs:
           echo "==> Bridge stubs created."
           grep 'ksu_hooks_bridge' kernel/Makefile || echo "WARNING: Entry not found!"
 
+
+      # ════════════════════════════════════════════════════════════
+      # ── SELinux bridge stubs ──
+      #   Upstream kernel source references ksu_selinux_hide_running
+      #   and fake_state in security/selinux/ — provide weak
+      #   definitions so the linker resolves them safely.
+      # ════════════════════════════════════════════════════════════
+      - name: Create SELinux bridge stubs
+        run: |
+          echo "==> Creating SELinux bridge stubs..."
+
+          {
+            echo '#include "include/security.h"'
+            echo ''
+            echo 'bool __attribute__((weak)) ksu_selinux_hide_running(void) { return false; }'
+            echo 'struct selinux_state __attribute__((weak)) fake_state;'
+          } > security/selinux/ksu_selinux_bridge.c
+
+          if ! grep -q 'ksu_selinux_bridge' security/selinux/Makefile; then
+            echo 'obj-y += ksu_selinux_bridge.o' >> security/selinux/Makefile
+          fi
+          echo "==> SELinux bridge stubs created."
+          grep 'ksu_selinux_bridge' security/selinux/Makefile || echo "WARNING: Entry not found!"
+
       - name: Build kernel (${{ matrix.display_name }})
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang-toolchain/bin:${PATH}"
@@ -801,7 +825,7 @@ jobs:
       #   RECOMMENDED. Silently skips if webhook isn't configured.
       # ════════════════════════════════════════════════════════════
       - name: Discord notification
-        if: success()
+        if: always()
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
@@ -812,9 +836,11 @@ jobs:
 
           echo "==> Sending Discord notification..."
 
-
           # Determine embed colour and label for all priorities
-          if echo "$FLASH_PRIORITY" | grep -q "FLASH NOW"; then
+          if [ "${{ job.status }}" = "failure" ]; then
+            EMBED_COLOR=15548997    # Red (#ED4245)
+            PRIORITY_LABEL="❌ BUILD FAILED — Check logs immediately"
+          elif echo "$FLASH_PRIORITY" | grep -q "FLASH NOW"; then
             EMBED_COLOR=15548997
             PRIORITY_LABEL="🔴 FLASH NOW — Security patches detected"
           elif echo "$FLASH_PRIORITY" | grep -q "RECOMMENDED"; then
@@ -835,7 +861,7 @@ jobs:
           # Build the JSON payload
           PAYLOAD=$(jq -n \
             --arg title "🔔 SM8550 Kernel Build — ${VARIANT}" \
-            --arg desc "A new kernel build requires your attention." \
+            --arg desc "Automated build status notification." \
             --arg priority "$PRIORITY_LABEL" \
             --arg sec "🔒 Security: ${TOTAL_SEC}" \
             --arg fix "🐛 Bug Fixes: ${TOTAL_FIX}" \
