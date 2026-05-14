@@ -70,7 +70,7 @@ jobs:
                 "variant": "resukisu",
                 "display_name": "ReSukiSU (main)",
                 "setup_url": "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh",
-                "setup_arg": "dev",
+                "setup_arg": "main",
                 "ksu_dir": "KernelSU",
                 "artifact_prefix": "resukisu",
                 "use_manual_hook": "true"
