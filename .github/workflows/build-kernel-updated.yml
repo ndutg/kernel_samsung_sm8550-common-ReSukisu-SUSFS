@@ -132,7 +132,6 @@ jobs:
       - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
-          repository: ndutg/kernel_samsung_sm8550-common-ksususfs
           ref: ${{ env.KERNEL_BRANCH }}
           fetch-depth: 1
           token: ${{ secrets.GITHUB_TOKEN }}
