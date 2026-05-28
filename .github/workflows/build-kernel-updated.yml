@@ -725,9 +725,12 @@ jobs:
 
           {
             echo '#include "include/security.h"'
+            echo '#include <linux/jump_label.h>'
             echo ''
-            echo 'bool __attribute__((weak)) ksu_selinux_hide_running(void) { return false; }'
-            echo 'struct selinux_state __attribute__((weak)) fake_state;'
+            echo 'DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);'
+            echo 'bool __attribute__((weak)) ksu_selinux_hide_enabled(void) { return false; }'
+            echo 'struct selinux_state __attribute__((weak)) fake_status;'
+            echo 'void __attribute__((weak)) initialize_fake_status(void) { }'
           } > security/selinux/ksu_selinux_bridge.c
 
           if ! grep -q 'ksu_selinux_bridge' security/selinux/Makefile; then
@@ -735,6 +738,7 @@ jobs:
           fi
           echo "==> SELinux bridge stubs created."
           grep 'ksu_selinux_bridge' security/selinux/Makefile || echo "WARNING: Entry not found!"
+
 
       - name: Build kernel (${{ matrix.display_name }})
         run: |
