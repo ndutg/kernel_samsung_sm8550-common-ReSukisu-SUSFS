@@ -719,25 +719,25 @@ jobs:
       #   and fake_state in security/selinux/ — provide weak
       #   definitions so the linker resolves them safely.
       # ════════════════════════════════════════════════════════════
-      - name: Create SELinux bridge stubs
-        run: |
-          echo "==> Creating SELinux bridge stubs..."
+      # - name: Create SELinux bridge stubs
+      #   run: |
+      #     echo "==> Creating SELinux bridge stubs..."
 
-          {
-            echo '#include "include/security.h"'
-            echo '#include <linux/jump_label.h>'
-            echo ''
-            echo 'DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);'
-            echo 'bool __attribute__((weak)) ksu_selinux_hide_enabled(void) { return false; }'
-            echo 'struct selinux_state __attribute__((weak)) fake_status;'
-            echo 'void __attribute__((weak)) initialize_fake_status(void) { }'
-          } > security/selinux/ksu_selinux_bridge.c
+      #     {
+      #       echo '#include "include/security.h"'
+      #       echo '#include <linux/jump_label.h>'
+      #       echo ''
+      #       echo 'DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);'
+      #       echo 'bool __attribute__((weak)) ksu_selinux_hide_enabled(void) { return false; }'
+      #       echo 'struct selinux_state __attribute__((weak)) fake_status;'
+      #       echo 'void __attribute__((weak)) initialize_fake_status(void) { }'
+      #     } > security/selinux/ksu_selinux_bridge.c
 
-          if ! grep -q 'ksu_selinux_bridge' security/selinux/Makefile; then
-            echo 'obj-y += ksu_selinux_bridge.o' >> security/selinux/Makefile
-          fi
-          echo "==> SELinux bridge stubs created."
-          grep 'ksu_selinux_bridge' security/selinux/Makefile || echo "WARNING: Entry not found!"
+      #     if ! grep -q 'ksu_selinux_bridge' security/selinux/Makefile; then
+      #       echo 'obj-y += ksu_selinux_bridge.o' >> security/selinux/Makefile
+      #     fi
+      #     echo "==> SELinux bridge stubs created."
+      #     grep 'ksu_selinux_bridge' security/selinux/Makefile || echo "WARNING: Entry not found!"
 
 
       - name: Build kernel (${{ matrix.display_name }})
