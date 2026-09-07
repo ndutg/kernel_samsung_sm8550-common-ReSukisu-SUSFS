@@ -701,6 +701,7 @@ jobs:
             echo 'int __attribute__((weak)) ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags) { return 0; }'
             echo 'int __attribute__((weak)) ksu_handle_execveat_sucompat(int *fd, const char __user **filename_user, void *argv, void *envp, int *flags) { return 0; }'
             echo 'int __attribute__((weak)) ksu_init_rc_hook(const char *data, unsigned long count) { return 0; }'
+            echo 'int __attribute__((weak)) ksu_install_su_fd(void) { return 0; }'
             echo 'bool __attribute__((weak)) susfs_is_current_ksu_domain(void) { return true; }'
             echo 'unsigned int __attribute__((weak)) susfs_ksu_sid;'
             echo 'unsigned int __attribute__((weak)) susfs_priv_app_sid;'
